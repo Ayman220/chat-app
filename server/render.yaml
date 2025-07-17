@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: chat-app-backend
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: EMAIL_HOST
+        sync: false
+      - key: EMAIL_PORT
+        value: 587
+      - key: EMAIL_USER
+        sync: false
+      - key: EMAIL_PASS
+        sync: false
+      - key: UPLOAD_PATH
+        value: ./uploads
+      - key: MAX_FILE_SIZE
+        value: 10485760
+      - key: CLIENT_URL
+        sync: false 
