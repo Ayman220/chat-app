@@ -33,7 +33,7 @@ export const sendMessage = createAsyncThunk(
     try {
       const response = await api.post<ApiResponse<Message>>(`/chats/${chatId}/messages`, { content });
       const message = response.data.data!;
-      
+
       // Emit message through socket for real-time updates
       const socket = socketService.getSocket();
       if (socket) {
@@ -42,7 +42,7 @@ export const sendMessage = createAsyncThunk(
           message
         });
       }
-      
+
       return {
         chatId,
         message,
@@ -79,11 +79,25 @@ const messageSlice = createSlice({
     },
     updateMessage: (state, action: PayloadAction<{ chatId: string; messageId: string; updates: Partial<Message> }>) => {
       const { chatId, messageId, updates } = action.payload;
+      console.log('🔄 REDUX updateMessage called:', { chatId, messageId, updates });
+
       if (state.messages[chatId]) {
         const messageIndex = state.messages[chatId].findIndex(msg => msg.id === messageId);
+        console.log('🔄 Message found at index:', messageIndex);
+
         if (messageIndex !== -1) {
+          const oldMessage = state.messages[chatId][messageIndex];
+          console.log('🔄 Old message state:', { read: oldMessage.read, delivered: oldMessage.delivered });
+
           state.messages[chatId][messageIndex] = { ...state.messages[chatId][messageIndex], ...updates };
+
+          const newMessage = state.messages[chatId][messageIndex];
+          console.log('🔄 New message state:', { read: newMessage.read, delivered: newMessage.delivered });
+        } else {
+          console.log('🔄 Message not found in state');
         }
+      } else {
+        console.log('🔄 Chat not found in state');
       }
     },
     setMessageDelivered: (state, action: PayloadAction<{ chatId: string; messageId: string; userId: string }>) => {
@@ -92,12 +106,7 @@ const messageSlice = createSlice({
         const messageIndex = state.messages[chatId].findIndex(msg => msg.id === messageId);
         if (messageIndex !== -1) {
           const message = state.messages[chatId][messageIndex];
-          if (!message.deliveredTo) {
-            message.deliveredTo = [];
-          }
-          if (!message.deliveredTo.includes(userId)) {
-            message.deliveredTo.push(userId);
-          }
+          message.delivered = true;
         }
       }
     },
@@ -160,7 +169,7 @@ const messageSlice = createSlice({
         const chatId = action.payload;
         if (state.messages[chatId]) {
           state.messages[chatId].forEach(message => {
-            message.is_read = true;
+            message.read = true;
           });
         }
       });

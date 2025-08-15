@@ -7,26 +7,24 @@ class SocketService {
 
   constructor() {
     this.baseURL = process.env.REACT_APP_SOCKET_URL || process.env.REACT_APP_API_URL?.replace('/api', '') || 'http://localhost:5000';
-    console.log('SocketService: Constructor - baseURL =', this.baseURL);
-    console.log('SocketService: Constructor - REACT_APP_SOCKET_URL =', process.env.REACT_APP_SOCKET_URL);
-    console.log('SocketService: Constructor - REACT_APP_API_URL =', process.env.REACT_APP_API_URL);
   }
 
   connect(token: string): Socket {
-    console.log('SocketService: connect() called with token:', !!token);
-    
+
     if (this.socket) {
-      console.log('SocketService: Disconnecting existing socket...');
+      console.log('SocketService: Disconnecting existing socket');
       this.socket.disconnect();
+      this.socket = null;
     }
 
-    console.log('SocketService: Connecting to socket at:', this.baseURL);
-    
+    console.log('SocketService: Creating new socket connection to:', this.baseURL);
     this.socket = io(this.baseURL, {
       auth: {
         token,
       },
       transports: ['websocket', 'polling'],
+      timeout: 20000,
+      forceNew: true,
     });
 
     this.socket.on('connect_error', (error) => {
@@ -34,14 +32,17 @@ class SocketService {
     });
 
     this.socket.on('connect', () => {
-      console.log('SocketService: Socket connected to:', this.baseURL);
+      console.log('SocketService: Connected successfully');
     });
 
     this.socket.on('disconnect', (reason) => {
-      console.log('SocketService: Socket disconnected:', reason);
+      console.log('SocketService: Disconnected:', reason);
     });
 
-    console.log('SocketService: Socket created:', !!this.socket);
+    this.socket.on('error', (error) => {
+      console.error('SocketService: Socket error:', error);
+    });
+
     return this.socket;
   }
 

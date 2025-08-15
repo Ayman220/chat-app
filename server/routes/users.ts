@@ -4,13 +4,52 @@ import { AuthRequest, UserWithoutPassword, ApiResponse } from '../types';
 
 const router = Router();
 
-// Get all users
+// Get all users with optional search
 router.get('/', async (req: AuthRequest, res: Response): Promise<Response> => {
   try {
-    const { rows: users } = await pool.query(
-      'SELECT id, name, email, avatar, status, created_at, updated_at FROM users WHERE id != $1',
-      [req.user?.id]
-    );
+    const { search } = req.query;
+    const userId = req.user?.id;
+
+    console.log('🔍 USERS ENDPOINT - Search query:', search);
+    console.log('🔍 USERS ENDPOINT - User ID:', userId);
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: 'User not authenticated'
+      } as ApiResponse);
+    }
+
+    let query: string;
+    let params: any[];
+
+    if (search && typeof search === 'string' && search.trim().length > 0) {
+      // Search users by name or email
+      query = `
+        SELECT id, name, email, avatar, status, created_at, updated_at 
+        FROM users 
+        WHERE id != $1 AND (name ILIKE $2 OR email ILIKE $3)
+        ORDER BY name ASC
+        LIMIT 20
+      `;
+      params = [userId, `%${search.trim()}%`, `%${search.trim()}%`];
+      console.log('🔍 USERS ENDPOINT - Executing search query with params:', params);
+    } else {
+      // Get all users (for backward compatibility)
+      query = `
+        SELECT id, name, email, avatar, status, created_at, updated_at 
+        FROM users 
+        WHERE id != $1
+        ORDER BY name ASC
+        LIMIT 50
+      `;
+      params = [userId];
+      console.log('🔍 USERS ENDPOINT - Executing all users query');
+    }
+
+    const { rows: users } = await pool.query(query, params);
+
+    console.log('🔍 USERS ENDPOINT - Found users:', users.length);
 
     return res.json({
       success: true,
@@ -123,38 +162,6 @@ router.put('/profile', async (req: AuthRequest, res: Response) => {
   }
 });
 
-// Search users
-router.get('/search/:query', async (req: AuthRequest, res: Response): Promise<Response> => {
-  try {
-    const { query } = req.params;
-    const userId = req.user?.id;
 
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        error: 'User not authenticated'
-      } as ApiResponse);
-    }
-
-    const { rows: users } = await pool.query(
-      `SELECT id, name, email, avatar, status, created_at, updated_at 
-       FROM users 
-       WHERE id != $1 AND (name ILIKE $2 OR email ILIKE $3)
-       LIMIT 20`,
-      [userId, `%${query}%`, `%${query}%`]
-    );
-
-    return res.json({
-      success: true,
-      data: users
-    } as ApiResponse<UserWithoutPassword[]>);
-  } catch (error) {
-    console.error('Search users error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to search users'
-    } as ApiResponse);
-  }
-});
 
 export default router; 

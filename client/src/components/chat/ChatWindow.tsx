@@ -4,7 +4,6 @@ import { fetchMessages, sendMessage, markAllMessagesAsRead, setMessageDelivered,
 import { addMessage } from '../../store/slices/messageSlice';
 import socketService from '../../services/socket';
 import LoadingSpinner from '../common/LoadingSpinner';
-import { Phone, Video, Info, Send, Paperclip, Check } from 'lucide-react';
 import { IoCheckmarkDone, IoCheckmark, IoSend, IoAttach } from 'react-icons/io5';
 import { RootState, AppDispatch } from '../../store';
 
@@ -55,6 +54,8 @@ const ChatWindow: React.FC = () => {
   const handleScroll = async () => {
     const container = messagesContainerRef.current;
     if (!container || loading || !hasMore) return;
+
+    // Load more messages when scrolling to top
     if (container.scrollTop === 0) {
       setIsLoadingMore(true);
       // Load previous page
@@ -91,6 +92,24 @@ const ChatWindow: React.FC = () => {
     }
   }, [currentChat]);
 
+  // Monitor specific message updates for debugging
+  useEffect(() => {
+    const updatedMessages = chatMessages.filter(msg => msg.read === true);
+    if (updatedMessages.length > 0) {
+      console.log('📊 ChatWindow: Found read messages:', updatedMessages.map(msg => ({ id: msg.id, read: msg.read, delivered: msg.delivered })));
+    }
+  }, [chatMessages]);
+
+  // Monitor chatMessages changes for debugging
+  useEffect(() => {
+
+    console.log('📊 ChatWindow: chatMessages updated:', {
+      chatId: currentChat?.id,
+      messageCount: chatMessages.length,
+      messages: chatMessages.map(msg => ({ id: msg.id, read: msg.read, delivered: msg.delivered }))
+    });
+  }, [chatMessages, currentChat?.id]);
+
   // Scroll to bottom when messages change, unless loading more
   useEffect(() => {
     const currentLength = chatMessages.length;
@@ -98,6 +117,8 @@ const ChatWindow: React.FC = () => {
     // If chat changed, scroll to bottom
     if (prevFirstMsgId.current === null || currentChat?.id !== prevFirstMsgId.current?.chatId) {
       if (messagesEndRef.current) messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+
+      // Don't automatically mark as read - let user action trigger it
     } else if (currentLength > prevMessagesLength.current) {
       // If a new message is added at the end, scroll to bottom
       const lastMsgId = chatMessages[chatMessages.length - 1]?.id;
@@ -114,70 +135,88 @@ const ChatWindow: React.FC = () => {
     const socket = socketService.getSocket();
     if (!socket || !currentChat) return;
     const handler = (data: any) => {
-      // Only add if not sent by this user
-      if (
-        data.chatId === currentChat.id &&
-        (data.message.sender_id !== user?.id && data.message.sender?.id !== user?.id)
-      ) {
-        dispatch(addMessage({ chatId: currentChat.id, message: data.message }));
+      try {
+        // Only add if not sent by this user
+        if (
+          data.chatId === currentChat.id &&
+          (data.message.sender_id !== user?.id && data.message.sender?.id !== user?.id)
+        ) {
+          dispatch(addMessage({ chatId: currentChat.id, message: data.message }));
+
+          // Mark messages as read when receiving new messages (user is actively viewing the chat)
+          dispatch(markAllMessagesAsRead(currentChat.id));
+        }
+      } catch (error) {
+        console.error('Error handling new_message event:', error);
       }
     };
     socket.on('new_message', handler);
     return () => { socket.off('new_message', handler); };
   }, [currentChat, dispatch, user?.id]);
 
-  // Mark messages as read when chat is opened
-  useEffect(() => {
-    if (currentChat && chatMessages.length > 0) {
-      // Mark all messages as read
-      dispatch(markAllMessagesAsRead(currentChat.id));
 
-      // Emit read events for messages not sent by current user
-      const socket = socketService.getSocket();
-      if (socket) {
-        chatMessages.forEach(msg => {
-          if (msg.sender_id !== user?.id && msg.sender?.id !== user?.id && !msg.is_read) {
-            socket.emit('message:read', { messageId: msg.id });
-          }
-        });
-      }
-    }
-  }, [currentChat, chatMessages, dispatch, user?.id]);
 
   // Listen for message:read events
   useEffect(() => {
     const socket = socketService.getSocket();
     if (!socket || !currentChat) return;
     const handler = (data: any) => {
-      if (data.chatId === currentChat.id) {
-        // For private chats, update is_read_by_recipient for own messages
-        if (currentChat.type === 'private') {
-          dispatch(updateMessage({
-            chatId: data.chatId,
-            messageId: data.messageId,
-            updates: { is_read_by_recipient: true }
-          }));
+      try {
+        console.log('📖 CLIENT RECEIVED READ EVENT:', data);
+        console.log('📖 Current chat ID:', currentChat.id);
+        console.log('📖 Event chat ID:', data.chatId);
+        console.log('📖 Chat messages before update:', chatMessages.length);
+        console.log('📖 Available message IDs in state:', chatMessages.map(msg => msg.id));
+        console.log('📖 Current user ID:', user?.id);
+        console.log('📖 Event user ID:', data.userId);
+
+        if (data.chatId === currentChat.id) {
+          console.log('📖 MATCHING CHAT - Updating message:', data.messageId);
+
+          // Check if the message exists in the current state
+          const messageExists = chatMessages.some(msg => msg.id === data.messageId);
+          console.log('📖 Message exists in state:', messageExists);
+
+          if (messageExists) {
+            // Only update if this is a message sent by the current user (for read receipts)
+            const messageToUpdate = chatMessages.find(msg => msg.id === data.messageId);
+            if (messageToUpdate && messageToUpdate.sender_id === user?.id) {
+              console.log('📖 UPDATING OWN MESSAGE - Dispatching updateMessage');
+              dispatch(updateMessage({
+                chatId: data.chatId,
+                messageId: data.messageId,
+                updates: { read: true }
+              }));
+            } else {
+              console.log('📖 NOT UPDATING - Message not sent by current user or not found');
+            }
+
+            console.log('📖 Update dispatched - checking state in next render');
+          } else {
+            console.log('📖 WARNING: Message not found in current state');
+          }
         } else {
-          // For group or fallback, update is_read
-          dispatch(updateMessage({
-            chatId: data.chatId,
-            messageId: data.messageId,
-            updates: { is_read: true }
-          }));
+          console.log('📖 CHAT ID MISMATCH - Not updating');
         }
+      } catch (error) {
+        console.error('Error handling message:read event:', error);
       }
     };
     socket.on('message:read', handler);
     return () => { socket.off('message:read', handler); };
-  }, [currentChat, dispatch]);
+  }, [currentChat, dispatch, chatMessages, user?.id]);
 
   // Listen for message:delivered events
   useEffect(() => {
     const socket = socketService.getSocket();
     if (!socket || !currentChat) return;
     const handler = (data: any) => {
-      if (data.chatId === currentChat.id) {
-        dispatch(setMessageDelivered({ chatId: data.chatId, messageId: data.messageId, userId: data.deliveredTo }));
+      try {
+        if (data.chatId === currentChat.id) {
+          dispatch(setMessageDelivered({ chatId: data.chatId, messageId: data.messageId, userId: data.delivered }));
+        }
+      } catch (error) {
+        console.error('Error handling message:delivered event:', error);
       }
     };
     socket.on('message:delivered', handler);
@@ -187,9 +226,10 @@ const ChatWindow: React.FC = () => {
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || !currentChat) return;
+
     await dispatch(sendMessage({ chatId: currentChat.id, content: input }));
     setInput('');
-    
+
     // Return focus to input if not on mobile
     if (!isMobile()) {
       const inputElement = document.querySelector('input[placeholder="Write a message"]') as HTMLInputElement;
@@ -272,12 +312,12 @@ const ChatWindow: React.FC = () => {
                 let statusIcon = null;
                 const recipientId = currentChat.type === 'private' ? currentChat.other_participant?.id : null;
                 if (isOwnMessage) {
-                  if (currentChat.type === 'private' && msg.is_read_by_recipient) {
+                  if (currentChat.type === 'private' && msg.read) {
                     // Double green tick (read by recipient)
                     statusIcon = (
                       <IoCheckmarkDone className="text-green-500" size={16} />
                     );
-                  } else if (recipientId && msg.deliveredTo && msg.deliveredTo.includes(recipientId)) {
+                  } else if (recipientId && msg.delivered) {
                     // Double blue tick (delivered)
                     statusIcon = (
                       <IoCheckmarkDone className="text-blue-300" size={16} />
@@ -305,8 +345,8 @@ const ChatWindow: React.FC = () => {
                     <div className={`flex flex-col ${isOwnMessage ? 'items-end' : 'items-start'} gap-1`}>
                       {/* Message Bubble */}
                       <div className={`max-w-lg px-4 py-2 rounded-lg shadow-sm ${isOwnMessage
-                          ? 'bg-blue-500 text-white'
-                          : 'bg-white text-blue-500 border border-blue-500'
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-white text-blue-500 border border-blue-500'
                         }`}>
                         <div className="text-sm">
                           {msg.content}
@@ -316,7 +356,7 @@ const ChatWindow: React.FC = () => {
                       {/* Message Time and Status */}
                       <div className={`flex flex-row-reverse items-end space-x-1 px-2 text-xs gap-2 text-black-400`}>
                         <span>
-                          {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}
                         </span>
                         {statusIcon && (
                           <span className="flex items-center">

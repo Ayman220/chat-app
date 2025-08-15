@@ -20,26 +20,20 @@ const ChatApp: React.FC = () => {
 
   // Listen for online/offline events
   useEffect(() => {
-    console.log('ChatApp: Setting up socket event listeners');
     const socket = socketService.getSocket();
-    console.log('ChatApp: Socket available =', !!socket);
     
     if (socket) {
       // Listen for online/offline events
       socket.on('user:online', (data: any) => {
-        console.log('ChatApp: Received user:online event:', data);
         dispatch(addOnlineUser(data.user));
       });
       
       socket.on('user:offline', (data: any) => {
-        console.log('ChatApp: Received user:offline event:', data);
         dispatch(removeOnlineUser(data.userId));
       });
     } else {
-      console.log('ChatApp: No socket available, trying to connect...');
       const token = localStorage.getItem('token');
       if (token) {
-        console.log('ChatApp: Connecting to socket with token...');
         socketService.connect(token);
       }
     }

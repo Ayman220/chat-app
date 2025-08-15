@@ -5,6 +5,7 @@ import { createChat } from '../../store/slices/chatSlice';
 import { RootState, AppDispatch } from '../../store';
 import { User, NewChatModalProps } from '../../types';
 import api from '../../services/api';
+import LoadingSpinner from '../common/LoadingSpinner';
 
 const NewChatModal: React.FC<NewChatModalProps> = ({ onClose }) => {
   const dispatch = useDispatch<AppDispatch>();
@@ -15,22 +16,43 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ onClose }) => {
   const [groupName, setGroupName] = useState<string>('');
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
+  const [searchLoading, setSearchLoading] = useState<boolean>(false);
+  const [hasSearched, setHasSearched] = useState<boolean>(false);
 
-  // Fetch users for chat creation
+  // Debounced search effect
   useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        const response = await api.get('/users');
-        if (response.data.success) {
-          setUsers(response.data.data.filter((u: User) => u.id !== user?.id));
-        }
-      } catch (error) {
-        console.error('Failed to fetch users:', error);
+    const timeoutId = setTimeout(() => {
+      if (searchQuery.trim().length > 0) {
+        fetchUsers(searchQuery);
+        setHasSearched(true);
+      } else if (hasSearched) {
+        // Clear results when search is empty
+        setUsers([]);
+        setHasSearched(false);
       }
-    };
+    }, 500); // 300ms debounce
 
-    fetchUsers();
-  }, [user?.id]);
+    return () => clearTimeout(timeoutId);
+  }, [searchQuery]);
+
+  // Fetch users based on search query
+  const fetchUsers = async (query: string) => {
+    if (query.trim().length === 0) return;
+    
+    setSearchLoading(true);
+    try {
+      const response = await api.get(`/users?search=${encodeURIComponent(query)}`);
+      if (response.data.success) {
+        const filteredUsers = response.data.data.filter((u: User) => u.id !== user?.id);
+        setUsers(filteredUsers);
+      }
+    } catch (error) {
+      console.error('Failed to fetch users:', error);
+      setUsers([]);
+    } finally {
+      setSearchLoading(false);
+    }
+  };
 
   const filteredUsers = users.filter(user =>
     user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -141,18 +163,34 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ onClose }) => {
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
             <input
               type="text"
-              placeholder="Search users..."
+              placeholder="Start typing to search users..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
+            {searchLoading && (
+              <LoadingSpinner size="sm" />
+            )}
           </div>
         </div>
 
         {/* User List */}
         <div className="max-h-60 overflow-y-auto mb-4">
-          {filteredUsers.length === 0 ? (
-            <p className="text-gray-500 text-center py-4">No users found</p>
+          {!hasSearched ? (
+            <div className="text-center py-8">
+              <Users className="mx-auto h-12 w-12 text-gray-400 mb-2" />
+              <p className="text-gray-500 text-sm">Start typing to search for users</p>
+            </div>
+          ) : searchLoading ? (
+            <div className="text-center py-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto mb-2"></div>
+              <p className="text-gray-500 text-sm">Searching users...</p>
+            </div>
+          ) : filteredUsers.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-gray-500 text-sm">No users found</p>
+              <p className="text-gray-400 text-xs mt-1">Try a different search term</p>
+            </div>
           ) : (
             <div className="space-y-2">
               {filteredUsers.map((user) => (

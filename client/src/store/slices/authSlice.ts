@@ -15,18 +15,14 @@ const initialState: AuthState = {
 export const login = createAsyncThunk(
   'auth/login',
   async (credentials: LoginFormData, { rejectWithValue }) => {
-    console.log('Auth: Login function called');
     try {
       const response = await api.post<ApiResponse<{ user: User; token: string }>>('/auth/login', credentials);
       const { user, token } = response.data.data!;
-      console.log('Auth: Login successful for user:', user.name);
       localStorage.setItem('token', token);
       
       // Connect to socket immediately after successful login
-      console.log('Auth: Connecting to socket after login...');
       try {
         const socket = socketService.connect(token);
-        console.log('Auth: Socket connection result:', !!socket);
       } catch (error) {
         console.error('Auth: Socket connection failed:', error);
       }

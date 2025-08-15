@@ -29,9 +29,8 @@ export interface Message {
   sender_id: string;
   sender?: User;
   chat_id: string;
-  is_read: boolean;
-  is_read_by_recipient?: boolean;
-  deliveredTo?: string[];
+  read: boolean;
+  delivered: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -119,11 +118,12 @@ export interface SocketEvents {
   'message:read': {
     chatId: string;
     messageId: string;
+    userId: string;
   };
   'message:delivered': {
     chatId: string;
     messageId: string;
-    deliveredTo: string;
+    delivered: string;
   };
 }
 

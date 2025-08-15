@@ -48,10 +48,9 @@ router.get('/:chatId', async (req: AuthRequest, res: Response): Promise<Response
         m.id,
         m.content,
         m.sender_id,
-        m.chat_id,
-        m.is_read,
-        m.is_read_by_recipient,
-        m.deliveredTo,
+        m.direct_chat_id as chat_id,
+        m.read,
+        m.delivered,
         m.created_at,
         m.updated_at,
         u.id as sender_id,
@@ -72,20 +71,19 @@ router.get('/:chatId', async (req: AuthRequest, res: Response): Promise<Response
       content: msg.content,
       sender_id: msg.sender_id,
       chat_id: msg.chat_id,
-      is_read: Boolean(msg.is_read),
-      is_read_by_recipient: Boolean(msg.is_read_by_recipient),
-      deliveredTo: msg.deliveredTo ? msg.deliveredTo : [],
+      read: Boolean(msg.read),
+      delivered: msg.delivered ?? false,
       created_at: msg.created_at,
       updated_at: msg.updated_at,
-             sender: {
-         id: msg.sender_id,
-         name: msg.sender_name,
-         email: msg.sender_email,
-         avatar: msg.sender_avatar,
-         status: msg.sender_status,
-         created_at: msg.created_at,
-         updated_at: msg.updated_at
-       }
+      sender: {
+        id: msg.sender_id,
+        name: msg.sender_name,
+        email: msg.sender_email,
+        avatar: msg.sender_avatar,
+        status: msg.sender_status,
+        created_at: msg.created_at,
+        updated_at: msg.updated_at
+      }
     }));
 
     const pagination = {
@@ -166,9 +164,9 @@ router.post('/:chatId', async (req: AuthRequest, res: Response) => {
         m.content,
         m.sender_id,
         m.chat_id,
-        m.is_read,
-        m.is_read_by_recipient,
-        m.deliveredTo,
+        m.read,
+        m.read_by_recipient,
+        m.delivered,
         m.created_at,
         m.updated_at,
         u.id as sender_id,
@@ -188,20 +186,19 @@ router.post('/:chatId', async (req: AuthRequest, res: Response) => {
       content: message.content,
       sender_id: message.sender_id,
       chat_id: message.chat_id,
-      is_read: Boolean(message.is_read),
-      is_read_by_recipient: Boolean(message.is_read_by_recipient),
-      deliveredTo: message.deliveredTo ? message.deliveredTo : [],
+      read: Boolean(message.read),
+      delivered: Boolean(message.delivered),
       created_at: message.created_at,
       updated_at: message.updated_at,
-             sender: {
-         id: message.sender_id,
-         name: message.sender_name,
-         email: message.sender_email,
-         avatar: message.sender_avatar,
-         status: message.sender_status,
-         created_at: message.created_at,
-         updated_at: message.updated_at
-       }
+      sender: {
+        id: message.sender_id,
+        name: message.sender_name,
+        email: message.sender_email,
+        avatar: message.sender_avatar,
+        status: message.sender_status,
+        created_at: message.created_at,
+        updated_at: message.updated_at
+      }
     };
 
     return res.status(201).json({
@@ -245,7 +242,7 @@ router.put('/:chatId/read', async (req: AuthRequest, res: Response) => {
 
     // Mark all unread messages as read
     await pool.query(
-      'UPDATE messages SET is_read = true WHERE chat_id = $1 AND sender_id != $2 AND is_read = false',
+      'UPDATE messages SET read = true WHERE chat_id = $1 AND sender_id != $2 AND read = false',
       [chatId, userId]
     );
 

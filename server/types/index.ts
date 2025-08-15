@@ -13,7 +13,7 @@ export interface User {
   updated_at: Date;
 }
 
-export interface UserWithoutPassword extends Omit<User, 'password'> {}
+export interface UserWithoutPassword extends Omit<User, 'password'> { }
 
 // Chat types
 export interface Chat {
@@ -42,9 +42,8 @@ export interface Message {
   content: string;
   sender_id: string;
   chat_id: string;
-  is_read: boolean;
-  is_read_by_recipient?: boolean;
-  deliveredTo?: string[];
+  read: boolean;
+  delivered: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -77,7 +76,7 @@ export interface SocketEvents {
   'user:online': { userId: string; user: UserWithoutPassword };
   'user:offline': { userId: string };
   'message:read': { chatId: string; messageId: string };
-  'message:delivered': { chatId: string; messageId: string; deliveredTo: string };
+  'message:delivered': { chatId: string; messageId: string; delivered: string };
 }
 
 // API Response types

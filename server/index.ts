@@ -12,8 +12,8 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 import authRoutes from './routes/auth';
 import userRoutes from './routes/users';
 import chatRoutes from './routes/chats';
-import messageRoutes from './routes/messages';
-import groupRoutes from './routes/groups';
+// import messageRoutes from './routes/messages';
+// import groupRoutes from './routes/groups';
 
 // Import middleware
 import { authenticateToken } from './middleware/auth';
@@ -45,22 +45,22 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 app.use('/api/auth', authRoutes);
 app.use('/api/users', authenticateToken, userRoutes);
 app.use('/api/chats', authenticateToken, chatRoutes);
-app.use('/api/messages', authenticateToken, messageRoutes);
-app.use('/api/groups', authenticateToken, groupRoutes);
+// Messages are now handled through chat routes
+// app.use('/api/messages', authenticateToken, messageRoutes);
+// Groups are now handled through chat routes
+// app.use('/api/groups', authenticateToken, groupRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    success: true, 
+  res.json({
+    success: true,
     message: 'Server is running',
     timestamp: new Date().toISOString()
   });
 });
 
 // Initialize socket manager
-console.log('Server: Initializing socket manager...');
 initializeSocket(io);
-console.log('Server: Socket manager initialized');
 
 // Error handling middleware
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -81,9 +81,6 @@ app.use('*', (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-});
+server.listen(PORT, () => { });
 
 export default app; 

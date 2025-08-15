@@ -232,7 +232,7 @@ Add/remove group participants
 - content (TEXT)
 - type (ENUM: 'text', 'image', 'video', 'document')
 - media_url (VARCHAR)
-- is_read (BOOLEAN)
+- read (BOOLEAN)
 - created_at (TIMESTAMP)
 
 ## Security Features

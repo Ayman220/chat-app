@@ -23,6 +23,7 @@ const pool = new Pool({
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
 });
+
 export const createTables = async (): Promise<void> => {
   try {
     // Users table
@@ -39,45 +40,78 @@ export const createTables = async (): Promise<void> => {
       )
     `);
 
-    // Chats table
+    // Direct chats table (for 1-on-1 conversations)
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS chats (
+      CREATE TABLE IF NOT EXISTS direct_chats (
         id VARCHAR(36) PRIMARY KEY,
-        name VARCHAR(255),
-        type VARCHAR(10) CHECK (type IN ('private', 'group')) NOT NULL,
+        user1_id VARCHAR(36) NOT NULL,
+        user2_id VARCHAR(36) NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user1_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (user2_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE (user1_id, user2_id),
+        CHECK (user1_id != user2_id)
       )
     `);
 
-    // Chat participants table
+    // Group chats table
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS chat_participants (
+      CREATE TABLE IF NOT EXISTS group_chats (
         id VARCHAR(36) PRIMARY KEY,
-        chat_id VARCHAR(36) NOT NULL,
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        avatar VARCHAR(500),
+        created_by VARCHAR(36) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Group chat participants table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS group_chat_participants (
+        id VARCHAR(36) PRIMARY KEY,
+        group_chat_id VARCHAR(36) NOT NULL,
         user_id VARCHAR(36) NOT NULL,
         role VARCHAR(10) CHECK (role IN ('admin', 'member')) DEFAULT 'member',
         joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
+        FOREIGN KEY (group_chat_id) REFERENCES group_chats(id) ON DELETE CASCADE,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-        UNIQUE (chat_id, user_id)
+        UNIQUE (group_chat_id, user_id)
       )
     `);
 
-    // Messages table
+    // Direct messages table
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS messages (
+      CREATE TABLE IF NOT EXISTS direct_messages (
         id VARCHAR(36) PRIMARY KEY,
         content TEXT NOT NULL,
         sender_id VARCHAR(36) NOT NULL,
-        chat_id VARCHAR(36) NOT NULL,
-        is_read BOOLEAN DEFAULT FALSE,
-        is_read_by_recipient BOOLEAN DEFAULT FALSE,
-        deliveredTo JSONB,
+        direct_chat_id VARCHAR(36) NOT NULL,
+        delivered BOOLEAN DEFAULT FALSE,
+        read BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
-        FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
+        FOREIGN KEY (direct_chat_id) REFERENCES direct_chats(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Group messages table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS group_messages (
+        id VARCHAR(36) PRIMARY KEY,
+        content TEXT NOT NULL,
+        sender_id VARCHAR(36) NOT NULL,
+        group_chat_id VARCHAR(36) NOT NULL,
+        read_by JSONB DEFAULT '[]'::jsonb,
+        delivered_to JSONB DEFAULT '[]'::jsonb,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (group_chat_id) REFERENCES group_chats(id) ON DELETE CASCADE
       )
     `);
 
@@ -93,7 +127,6 @@ export const createTables = async (): Promise<void> => {
       )
     `);
 
-    console.log('Database tables created successfully');
     return;
   } catch (error) {
     console.error('Error creating tables:', error);
@@ -104,12 +137,13 @@ export const createTables = async (): Promise<void> => {
 export const dropTables = async (): Promise<void> => {
   try {
     await pool.query('DROP TABLE IF EXISTS password_reset_tokens CASCADE');
-    await pool.query('DROP TABLE IF EXISTS messages CASCADE');
-    await pool.query('DROP TABLE IF EXISTS chat_participants CASCADE');
-    await pool.query('DROP TABLE IF EXISTS chats CASCADE');
+    await pool.query('DROP TABLE IF EXISTS group_messages CASCADE');
+    await pool.query('DROP TABLE IF EXISTS direct_messages CASCADE');
+    await pool.query('DROP TABLE IF EXISTS group_chat_participants CASCADE');
+    await pool.query('DROP TABLE IF EXISTS group_chats CASCADE');
+    await pool.query('DROP TABLE IF EXISTS direct_chats CASCADE');
     await pool.query('DROP TABLE IF EXISTS users CASCADE');
 
-    console.log('Database tables dropped successfully');
   } catch (error) {
     console.error('Error dropping tables:', error);
     throw error;
@@ -120,7 +154,6 @@ export const resetDatabase = async (): Promise<void> => {
   try {
     await dropTables();
     await createTables();
-    console.log('Database reset successfully');
   } catch (error) {
     console.error('Error resetting database:', error);
     throw error;
