@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate } from 'react-router-dom';
 import { X, Search, Users } from 'lucide-react';
 import { createChat } from '../../store/slices/chatSlice';
 import { RootState, AppDispatch } from '../../store';
@@ -9,6 +10,7 @@ import LoadingSpinner from '../common/LoadingSpinner';
 
 const NewChatModal: React.FC<NewChatModalProps> = ({ onClose }) => {
   const dispatch = useDispatch<AppDispatch>();
+  const navigate = useNavigate();
   const { user } = useSelector((state: RootState) => state.auth);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
@@ -38,7 +40,7 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ onClose }) => {
   // Fetch users based on search query
   const fetchUsers = async (query: string) => {
     if (query.trim().length === 0) return;
-    
+
     setSearchLoading(true);
     try {
       const response = await api.get(`/users?search=${encodeURIComponent(query)}`);
@@ -82,8 +84,12 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ onClose }) => {
         name: chatType === 'group' ? groupName : undefined
       };
 
-      await dispatch(createChat(chatData));
-      onClose();
+      const result = await dispatch(createChat(chatData));
+      if (createChat.fulfilled.match(result)) {
+        // Navigate to the newly created chat
+        navigate(`/chat/${result.payload.id}`);
+        onClose();
+      }
     } catch (error) {
       console.error('Failed to create chat:', error);
     } finally {
@@ -196,11 +202,10 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ onClose }) => {
               {filteredUsers.map((user) => (
                 <div
                   key={user.id}
-                  className={`flex items-center p-2 rounded-lg cursor-pointer transition-colors ${
-                    selectedUsers.includes(user.id)
-                      ? 'bg-blue-100 border border-blue-300'
-                      : 'hover:bg-gray-50'
-                  }`}
+                  className={`flex items-center p-2 rounded-lg cursor-pointer transition-colors ${selectedUsers.includes(user.id)
+                    ? 'bg-blue-100 border border-blue-300'
+                    : 'hover:bg-gray-50'
+                    }`}
                   onClick={() => handleUserToggle(user.id)}
                 >
                   <div className="w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center mr-3">

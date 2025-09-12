@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { Pool } from 'pg';
 
-// Load environment variables from root directory
+// Load environment variables from server directory
 dotenv.config({ path: path.join(__dirname, '../.env') });
 const dbConfig: DatabaseConfig = {
   host: process.env.DB_HOST || 'localhost',

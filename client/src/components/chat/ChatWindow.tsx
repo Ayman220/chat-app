@@ -11,7 +11,6 @@ const ChatWindow: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
   const { currentChat } = useSelector((state: RootState) => state.chat);
   const { user } = useSelector((state: RootState) => state.auth);
-  const onlineUsers = useSelector((state: RootState) => state.ui.onlineUsers);
   const { messages, loading, sending } = useSelector((state: RootState) => state.message);
   const [input, setInput] = useState<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -143,8 +142,11 @@ const ChatWindow: React.FC = () => {
         ) {
           dispatch(addMessage({ chatId: currentChat.id, message: data.message }));
 
-          // Mark messages as read when receiving new messages (user is actively viewing the chat)
-          dispatch(markAllMessagesAsRead(currentChat.id));
+          // Only mark messages as read if the user is actively viewing the chat
+          // Check if the document is visible (not minimized or in background tab)
+          if (document.visibilityState === 'visible') {
+            dispatch(markAllMessagesAsRead(currentChat.id));
+          }
         }
       } catch (error) {
         console.error('Error handling new_message event:', error);
@@ -154,7 +156,20 @@ const ChatWindow: React.FC = () => {
     return () => { socket.off('new_message', handler); };
   }, [currentChat, dispatch, user?.id]);
 
+  // Listen for visibility changes to mark messages as read when user returns to chat
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && currentChat) {
+        // User returned to the chat, mark all messages as read
+        dispatch(markAllMessagesAsRead(currentChat.id));
+      }
+    };
 
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [currentChat, dispatch]);
 
   // Listen for message:read events
   useEffect(() => {

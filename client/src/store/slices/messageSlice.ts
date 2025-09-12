@@ -164,14 +164,11 @@ const messageSlice = createSlice({
         state.sending = false;
         state.error = action.payload as string;
       })
-      // Mark Messages as Read
+      // Mark Messages as Read - Don't automatically mark all messages as read
+      // The server will emit message:read events for messages that were actually marked as read
       .addCase(markAllMessagesAsRead.fulfilled, (state, action) => {
-        const chatId = action.payload;
-        if (state.messages[chatId]) {
-          state.messages[chatId].forEach(message => {
-            message.read = true;
-          });
-        }
+        // No automatic state update - let socket events handle read status updates
+        console.log('📖 markAllMessagesAsRead completed for chat:', action.payload);
       });
   },
 });

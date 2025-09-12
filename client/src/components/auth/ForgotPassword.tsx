@@ -9,7 +9,7 @@ import toast from 'react-hot-toast';
 const ForgotPassword: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
   const { loading, error } = useSelector((state: RootState) => state.auth);
-  
+
   const [email, setEmail] = useState<string>('');
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
 
@@ -22,7 +22,7 @@ const ForgotPassword: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!email) {
       toast.error('Please enter your email address');
       return;
@@ -33,9 +33,12 @@ const ForgotPassword: React.FC = () => {
       toast.error('Please enter a valid email address');
       return;
     }
-    
-    await dispatch(forgotPassword(email));
-    setIsSubmitted(true);
+
+    const result = await dispatch(forgotPassword(email));
+    if (forgotPassword.fulfilled.match(result)) {
+      toast.success('Password reset email sent successfully!');
+      setIsSubmitted(true);
+    }
   };
 
   return (
@@ -49,7 +52,7 @@ const ForgotPassword: React.FC = () => {
             <ArrowLeft size={16} className="mr-1" />
             Back to login
           </Link>
-          
+
           <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
             Forgot your password?
           </h2>
@@ -57,7 +60,7 @@ const ForgotPassword: React.FC = () => {
             Enter your email address and we'll send you a link to reset your password.
           </p>
         </div>
-        
+
         {!isSubmitted ? (
           <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
             <div>

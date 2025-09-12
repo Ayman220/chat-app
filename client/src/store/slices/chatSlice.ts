@@ -29,7 +29,7 @@ export const createChat = createAsyncThunk(
       const response = await api.post<ApiResponse<Chat>>('/chats', { type, participants, name });
       return response.data.data!;
     } catch (error: any) {
-      return rejectWithValue(error.response?.data?.message || 'Failed to create chat');
+      return rejectWithValue(error.response?.data?.error || 'Failed to create chat');
     }
   }
 );

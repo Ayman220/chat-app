@@ -8,6 +8,7 @@ const initialState: AuthState = {
   token: localStorage.getItem('token'),
   isAuthenticated: false,
   loading: false,
+  initialLoading: !!localStorage.getItem('token'), // Only show initial loading if there's a token to verify
   error: null,
 };
 
@@ -19,21 +20,17 @@ export const login = createAsyncThunk(
       const response = await api.post<ApiResponse<{ user: User; token: string }>>('/auth/login', credentials);
       const { user, token } = response.data.data!;
       localStorage.setItem('token', token);
-      
+
       // Connect to socket immediately after successful login
       try {
         const socket = socketService.connect(token);
       } catch (error) {
         console.error('Auth: Socket connection failed:', error);
       }
-      
+
       return { user, token };
     } catch (error: any) {
-      const errorMessage = error.response?.data?.message || 'Login failed';
-      // Show toast here to avoid duplicate toasts
-      import('react-hot-toast').then(({ default: toast }) => {
-        toast.error(errorMessage);
-      });
+      const errorMessage = error.response?.data?.error || 'Login failed';
       return rejectWithValue(errorMessage);
     }
   }
@@ -103,9 +100,9 @@ const authSlice = createSlice({
       state.token = null;
       state.isAuthenticated = false;
       localStorage.removeItem('token');
-      
-          // Disconnect socket on logout
-    socketService.disconnect();
+
+      // Disconnect socket on logout
+      socketService.disconnect();
     },
     clearError: (state) => {
       state.error = null;
@@ -149,15 +146,15 @@ const authSlice = createSlice({
       })
       // Verify Token
       .addCase(verifyToken.pending, (state) => {
-        state.loading = true;
+        state.initialLoading = true;
       })
       .addCase(verifyToken.fulfilled, (state, action) => {
-        state.loading = false;
+        state.initialLoading = false;
         state.user = action.payload;
         state.isAuthenticated = true;
       })
       .addCase(verifyToken.rejected, (state) => {
-        state.loading = false;
+        state.initialLoading = false;
         state.user = null;
         state.token = null;
         state.isAuthenticated = false;

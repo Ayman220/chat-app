@@ -18,23 +18,24 @@ import LoadingSpinner from './components/common/LoadingSpinner';
 
 // Protected Route Component
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated, loading } = useSelector((state: RootState) => state.auth);
-  
-  if (loading) {
+  const { isAuthenticated, initialLoading } = useSelector((state: RootState) => state.auth);
+
+  if (initialLoading) {
     return <LoadingSpinner size="lg" />;
   }
-  
+
   return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
 };
 
 // Public Route Component (redirect if authenticated)
 const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated, loading } = useSelector((state: RootState) => state.auth);
-  
-  if (loading) {
+  const { isAuthenticated, initialLoading, token } = useSelector((state: RootState) => state.auth);
+
+  // Only show loading if there's a token to verify
+  if (initialLoading && token) {
     return <LoadingSpinner size="lg" />;
   }
-  
+
   return !isAuthenticated ? <>{children}</> : <Navigate to="/" replace />;
 };
 
@@ -42,7 +43,7 @@ const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 const AppContent: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
   const { theme } = useSelector((state: RootState) => state.ui);
-  const { loading } = useSelector((state: RootState) => state.auth);
+  const { initialLoading, token } = useSelector((state: RootState) => state.auth);
 
   useEffect(() => {
     // Initialize theme
@@ -54,11 +55,14 @@ const AppContent: React.FC = () => {
   }, [theme]);
 
   useEffect(() => {
-    // Verify token on app load
-    dispatch(verifyToken());
-  }, [dispatch]);
+    // Only verify token if there's a token to verify
+    if (token) {
+      dispatch(verifyToken());
+    }
+  }, [dispatch, token]);
 
-  if (loading) {
+  // Only show loading if there's a token to verify
+  if (initialLoading && token) {
     return <LoadingSpinner size="lg" />;
   }
 
@@ -87,7 +91,7 @@ const AppContent: React.FC = () => {
               <ResetPassword />
             </PublicRoute>
           } />
-          
+
           {/* Protected Routes */}
           <Route path="/" element={
             <ProtectedRoute>
@@ -99,11 +103,11 @@ const AppContent: React.FC = () => {
               <ChatApp />
             </ProtectedRoute>
           } />
-          
+
           {/* Catch all route */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-        
+
         {/* Toast notifications */}
         <Toaster
           position="top-right"

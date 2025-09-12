@@ -21,13 +21,13 @@ const ChatApp: React.FC = () => {
   // Listen for online/offline events
   useEffect(() => {
     const socket = socketService.getSocket();
-    
+
     if (socket) {
       // Listen for online/offline events
       socket.on('user:online', (data: any) => {
         dispatch(addOnlineUser(data.user));
       });
-      
+
       socket.on('user:offline', (data: any) => {
         dispatch(removeOnlineUser(data.userId));
       });
@@ -72,24 +72,24 @@ const ChatApp: React.FC = () => {
   return (
     <div className="flex flex-col h-screen bg-chat-bg">
       {/* Header - spans full width */}
-      <Header onMenuClick={toggleSidebar} showMenuButton={!sidebarOpen} />
-      
+      <Header onMenuClick={toggleSidebar} showMenuButton={false} />
+
       {/* Main content area */}
       <div className="flex flex-1 min-h-0">
         {/* Sidebar */}
         <div className={`${sidebarOpen ? 'block' : 'hidden'} md:block md:w-80 lg:w-96 flex-shrink-0`}>
           <Sidebar onClose={() => setSidebarOpen(false)} />
         </div>
-        
+
         {/* Main chat area */}
         <div className="flex-1 flex flex-col">
           <ChatWindow />
         </div>
       </div>
-      
+
       {/* Mobile overlay */}
       {sidebarOpen && (
-        <div 
+        <div
           className="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
           onClick={() => setSidebarOpen(false)}
         />

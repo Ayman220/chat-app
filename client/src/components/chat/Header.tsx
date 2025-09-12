@@ -37,28 +37,28 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick, showMenuButton = true }) =
             <Menu className="w-5 h-5 text-gray-600" />
           </button>
         )}
-        
+
         {/* Chat info */}
         {currentChat && (
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center">
               <span className="text-white font-semibold text-sm">
-                {currentChat.type === 'private' 
-                  ? currentChat.participants?.find(p => p.id !== user?.id)?.name?.charAt(0).toUpperCase() || '?'
+                {currentChat.type === 'private'
+                  ? currentChat.other_participant?.name?.charAt(0).toUpperCase() || 'U'
                   : currentChat.name?.charAt(0).toUpperCase() || 'G'
                 }
               </span>
             </div>
             <div>
               <h1 className="font-semibold text-gray-900">
-                {currentChat.type === 'private' 
-                  ? currentChat.participants?.find(p => p.id !== user?.id)?.name || 'Unknown User'
+                {currentChat.type === 'private'
+                  ? currentChat.other_participant?.name || 'Unknown User'
                   : currentChat.name || 'Group Chat'
                 }
               </h1>
               {currentChat.type === 'private' && (
                 <p className="text-sm text-gray-500">
-                  {currentChat.participants?.find(p => p.id !== user?.id)?.status || 'offline'}
+                  {currentChat.other_participant?.status || 'offline'}
                 </p>
               )}
             </div>
@@ -101,17 +101,17 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick, showMenuButton = true }) =
                 <p className="font-semibold text-gray-900">{user?.name}</p>
                 <p className="text-sm text-gray-500">{user?.email}</p>
               </div>
-              
+
               <button className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors flex items-center space-x-2">
                 <User className="w-4 h-4" />
                 <span>Profile</span>
               </button>
-              
+
               <button className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors flex items-center space-x-2">
                 <Settings className="w-4 h-4" />
                 <span>Settings</span>
               </button>
-              
+
               <div className="border-t border-gray-100 mt-1">
                 <button
                   onClick={handleLogout}

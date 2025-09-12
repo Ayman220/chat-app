@@ -94,11 +94,14 @@ export const initializeSocket = (io: Server): void => {
     // Handle new message
     socket.on('new_message', async (data: { chatId: string; message: MessageWithSender }) => {
       try {
+        console.log('📨 NEW MESSAGE HANDLER - Message ID:', data.message.id, 'Chat:', data.chatId, 'Sender:', data.message.sender_id);
+        console.log('📨 CURRENT CONNECTED USERS:', Array.from(connectedUsers.keys()));
+
         // Broadcast message to all users in the chat
         socket.to(data.chatId).emit('new_message', data);
 
-        // Don't automatically mark as delivered - let the recipient's online status handle this
-        // await updateMessageDeliveryStatus(data.chatId, data.message.id);
+        // Update delivery status for online users who are not actively viewing the chat
+        await updateMessageDeliveryStatus(data.chatId, data.message.id, data.message.sender_id);
       } catch (error) {
         console.error('Error handling new message:', error);
       }
@@ -170,64 +173,8 @@ export const initializeSocket = (io: Server): void => {
       }
     });
 
-    // Handle message delivered
-    socket.on('message:delivered', async (data: { messageId: string; delivered: string }) => {
-      try {
-        console.log('📨 MESSAGE DELIVERED - Message ID:', data.messageId, 'Delivered to:', data.delivered);
-
-        // First, try to find as direct message
-        const { rows: directMessages } = await pool.query(
-          'SELECT direct_chat_id as chat_id FROM direct_messages WHERE id = $1',
-          [data.messageId]
-        );
-
-        if (directMessages.length > 0) {
-          const message = directMessages[0];
-
-          // Update direct message delivery status
-          await pool.query(
-            'UPDATE direct_messages SET delivered = true WHERE id = $1',
-            [data.messageId]
-          );
-
-          // Broadcast delivery status
-          socket.to(message.chat_id).emit('message:delivered', {
-            chatId: message.chat_id,
-            messageId: data.messageId,
-            delivered: data.delivered
-          });
-        } else {
-          // Try to find as group message
-          const { rows: groupMessages } = await pool.query(
-            'SELECT group_chat_id as chat_id, delivered_to FROM group_messages WHERE id = $1',
-            [data.messageId]
-          );
-
-          if (groupMessages.length > 0) {
-            const message = groupMessages[0];
-
-            // Update group message delivery status
-            let delivered = message.delivered_to ? message.delivered_to : [];
-            if (!delivered.includes(data.delivered)) {
-              delivered.push(data.delivered);
-              await pool.query(
-                'UPDATE group_messages SET delivered_to = $1 WHERE id = $2',
-                [delivered, data.messageId]
-              );
-            }
-
-            // Broadcast delivery status
-            socket.to(message.chat_id).emit('message:delivered', {
-              chatId: message.chat_id,
-              messageId: data.messageId,
-              delivered: data.delivered
-            });
-          }
-        }
-      } catch (error: any) {
-        console.error('Error handling message delivered:', error);
-      }
-    });
+    // Handle message delivered - This handler is removed to prevent circular delivery marking
+    // The updateMessageDeliveryStatus function handles delivery status updates directly
 
     // Handle disconnect
     socket.on('disconnect', () => {
@@ -245,7 +192,7 @@ export const initializeSocket = (io: Server): void => {
 };
 
 // Helper function to update message delivery status
-const updateMessageDeliveryStatus = async (chatId: string, messageId: string): Promise<void> => {
+const updateMessageDeliveryStatus = async (chatId: string, messageId: string, senderId: string): Promise<void> => {
   try {
     console.log('📨 UPDATE MESSAGE DELIVERY - Chat ID:', chatId, 'Message ID:', messageId);
 
@@ -265,17 +212,41 @@ const updateMessageDeliveryStatus = async (chatId: string, messageId: string): P
       if (directChatData.length > 0) {
         const { user1_id, user2_id } = directChatData[0];
         const participantIds = [user1_id, user2_id];
-        const onlineUserIds = Array.from(connectedUsers.keys());
 
-        // Find online participants
-        const onlineParticipants = participantIds.filter(id => onlineUserIds.includes(id));
+        // Find online participants by checking both connectedUsers map and actual socket connection
+        // IMPORTANT: Exclude the sender from delivery status - only recipients matter for delivery
+        const onlineParticipants = participantIds.filter(id => {
+          // Skip the sender - delivery status is only for recipients
+          if (id === senderId) return false;
+
+          const connectedUser = connectedUsers.get(id);
+          if (!connectedUser) return false;
+
+          // Verify the socket is still connected
+          const socket = globalIo.sockets.sockets.get(connectedUser.socketId);
+          return socket && socket.connected;
+        });
+
+        console.log('📨 DIRECT CHAT - Participants:', participantIds);
+        console.log('📨 DIRECT CHAT - Online participants:', onlineParticipants);
+        console.log('📨 DIRECT CHAT - Connected users map:', Array.from(connectedUsers.keys()));
 
         // Update delivery status for direct messages
         if (onlineParticipants.length > 0) {
+          console.log('📨 MARKING AS DELIVERED - Message ID:', messageId);
           await pool.query(
             'UPDATE direct_messages SET delivered = true WHERE id = $1',
             [messageId]
           );
+
+          // Emit delivery event to notify the sender
+          globalIo.to(chatId).emit('message:delivered', {
+            chatId: chatId,
+            messageId: messageId,
+            delivered: onlineParticipants[0] // For direct chat, there's only one recipient
+          });
+        } else {
+          console.log('📨 NOT MARKING AS DELIVERED - No online participants for message:', messageId);
         }
       }
     } else {
@@ -286,10 +257,20 @@ const updateMessageDeliveryStatus = async (chatId: string, messageId: string): P
       );
 
       const participantIds = participants.map(p => p.user_id);
-      const onlineUserIds = Array.from(connectedUsers.keys());
 
-      // Find online participants
-      const onlineParticipants = participantIds.filter(id => onlineUserIds.includes(id));
+      // Find online participants by checking both connectedUsers map and actual socket connection
+      // IMPORTANT: Exclude the sender from delivery status - only recipients matter for delivery
+      const onlineParticipants = participantIds.filter(id => {
+        // Skip the sender - delivery status is only for recipients
+        if (id === senderId) return false;
+
+        const connectedUser = connectedUsers.get(id);
+        if (!connectedUser) return false;
+
+        // Verify the socket is still connected
+        const socket = globalIo.sockets.sockets.get(connectedUser.socketId);
+        return socket && socket.connected;
+      });
 
       // Update delivery status for group messages
       if (onlineParticipants.length > 0) {
@@ -297,6 +278,15 @@ const updateMessageDeliveryStatus = async (chatId: string, messageId: string): P
           'UPDATE group_messages SET delivered_to = $1 WHERE id = $2',
           [onlineParticipants, messageId]
         );
+
+        // Emit delivery event for each online participant
+        onlineParticipants.forEach(participantId => {
+          globalIo.to(chatId).emit('message:delivered', {
+            chatId: chatId,
+            messageId: messageId,
+            delivered: participantId
+          });
+        });
       }
     }
   } catch (error: any) {

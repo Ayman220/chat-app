@@ -97,10 +97,6 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<Response> => {
       return new Date(bTime).getTime() - new Date(aTime).getTime();
     });
 
-    console.log('📋 GET CHATS - Direct chats found:', directChats.length);
-    console.log('📋 GET CHATS - Group chats found:', groupChats.length);
-    console.log('📋 GET CHATS - Total chats:', allChats.length);
-
     // For private chats, get the other participant
     const chatsWithParticipants = await Promise.all(
       allChats.map(async (chat: any) => {
@@ -281,10 +277,6 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     const { type, participants, name } = req.body;
     const userId = req.user?.id;
 
-    console.log('🔨 CREATE CHAT - Type:', type);
-    console.log('🔨 CREATE CHAT - Participants:', participants);
-    console.log('🔨 CREATE CHAT - Name:', name);
-
     if (!userId) {
       return res.status(401).json({
         success: false,
@@ -336,13 +328,59 @@ router.post('/', async (req: AuthRequest, res: Response) => {
           [existingChatId]
         );
 
+        // Get the other participant for existing private chat
+        const existingOtherUserId = existingChat[0].user1_id === userId ? existingChat[0].user2_id : existingChat[0].user1_id;
+        const { rows: otherUser } = await pool.query(
+          'SELECT id, name, email, avatar, status FROM users WHERE id = $1',
+          [existingOtherUserId]
+        );
+
+        // Get message count and last message for existing chat
+        const { rows: messageStats } = await pool.query(`
+          SELECT 
+            COUNT(*) as message_count,
+            (
+              SELECT COUNT(*)
+              FROM direct_messages dm
+              WHERE dm.direct_chat_id = $1 AND dm.read = false AND dm.sender_id != $2
+            ) as unread_count,
+            (
+              SELECT dm.content
+              FROM direct_messages dm
+              WHERE dm.direct_chat_id = $1
+              ORDER BY dm.created_at DESC
+              LIMIT 1
+            ) as last_message_content,
+            (
+              SELECT dm.created_at
+              FROM direct_messages dm
+              WHERE dm.direct_chat_id = $1
+              ORDER BY dm.created_at DESC
+              LIMIT 1
+            ) as last_message_time
+          FROM direct_messages dm
+          WHERE dm.direct_chat_id = $1
+        `, [existingChat[0].id, userId]);
+
+        const stats = messageStats[0] || { message_count: 0, unread_count: 0, last_message_content: null, last_message_time: null };
+
         return res.status(200).json({
           success: true,
           data: {
             id: existingChat[0].id,
             type: 'private',
+            name: null,
             created_at: existingChat[0].created_at,
-            updated_at: existingChat[0].updated_at
+            updated_at: existingChat[0].updated_at,
+            message_count: parseInt(stats.message_count) || 0,
+            unread_count: parseInt(stats.unread_count) || 0,
+            last_message_content: stats.last_message_content,
+            last_message_time: stats.last_message_time,
+            other_participant: otherUser[0],
+            last_message: stats.last_message_content ? {
+              content: stats.last_message_content,
+              created_at: stats.last_message_time
+            } : null
           }
         } as ApiResponse<any>);
       }
@@ -360,11 +398,25 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         [chatId]
       );
 
+      // Get the other participant for private chat
+      const newOtherUserId = directChats[0].user1_id === userId ? directChats[0].user2_id : directChats[0].user1_id;
+      const { rows: otherUser } = await pool.query(
+        'SELECT id, name, email, avatar, status FROM users WHERE id = $1',
+        [newOtherUserId]
+      );
+
       chatData = {
         id: directChats[0].id,
         type: 'private',
+        name: null,
         created_at: directChats[0].created_at,
-        updated_at: directChats[0].updated_at
+        updated_at: directChats[0].updated_at,
+        message_count: 0,
+        unread_count: 0,
+        last_message_content: null,
+        last_message_time: null,
+        other_participant: otherUser[0],
+        last_message: null
       };
 
     } else if (type === 'group') {
@@ -396,7 +448,12 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         name: groupChats[0].name,
         type: 'group',
         created_at: groupChats[0].created_at,
-        updated_at: groupChats[0].updated_at
+        updated_at: groupChats[0].updated_at,
+        message_count: 0,
+        unread_count: 0,
+        last_message_content: null,
+        last_message_time: null,
+        last_message: null
       };
     } else {
       return res.status(400).json({

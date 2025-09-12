@@ -10,7 +10,7 @@ const Login: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
   const { loading, error, isAuthenticated } = useSelector((state: RootState) => state.auth);
   const navigate = useNavigate();
-  
+
   const [formData, setFormData] = useState({
     email: '',
     password: ''
@@ -19,20 +19,21 @@ const Login: React.FC = () => {
   const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
-    if (isAuthenticated) {
-      navigate('/');
-    }
-  }, [isAuthenticated, navigate]);
-
-  useEffect(() => {
     if (error) {
       setHasError(true);
+      toast.error(error);
       dispatch(clearError());
-      // Don't clear form data on error - let user correct their input
     } else {
       setHasError(false);
     }
   }, [error, dispatch]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      toast.success('Welcome back!');
+      navigate('/');
+    }
+  }, [isAuthenticated, navigate]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData({
@@ -51,7 +52,7 @@ const Login: React.FC = () => {
       toast.error('Please fill in all fields');
       return;
     }
-    
+
     await dispatch(login(formData));
   };
 
@@ -72,7 +73,7 @@ const Login: React.FC = () => {
             </Link>
           </p>
         </div>
-        
+
         <form className="mt-8 space-y-6 bg-white p-8 rounded-xl shadow-lg" onSubmit={handleSubmit}>
           <div className="space-y-4">
             <div>
@@ -91,16 +92,15 @@ const Login: React.FC = () => {
                   required
                   value={formData.email}
                   onChange={handleChange}
-                  className={`appearance-none relative block w-full pl-10 pr-3 py-3 border placeholder-gray-500 text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:z-10 sm:text-sm transition-all duration-200 ${
-                    hasError 
-                      ? 'border-red-300 focus:ring-red-500 focus:border-red-500 hover:border-red-400' 
-                      : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500 hover:border-gray-400'
-                  } hover:shadow-sm`}
+                  className={`appearance-none relative block w-full pl-10 pr-3 py-3 border placeholder-gray-500 text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:z-10 sm:text-sm transition-all duration-200 ${hasError
+                    ? 'border-red-300 focus:ring-red-500 focus:border-red-500 hover:border-red-400'
+                    : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500 hover:border-gray-400'
+                    } hover:shadow-sm`}
                   placeholder="Enter your email"
                 />
               </div>
             </div>
-            
+
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-gray-700">
                 Password
@@ -117,11 +117,10 @@ const Login: React.FC = () => {
                   required
                   value={formData.password}
                   onChange={handleChange}
-                  className={`appearance-none relative block w-full pl-10 pr-12 py-3 border placeholder-gray-500 text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:z-10 sm:text-sm transition-all duration-200 ${
-                    hasError 
-                      ? 'border-red-300 focus:ring-red-500 focus:border-red-500 hover:border-red-400' 
-                      : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500 hover:border-gray-400'
-                  } hover:shadow-sm`}
+                  className={`appearance-none relative block w-full pl-10 pr-12 py-3 border placeholder-gray-500 text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:z-10 sm:text-sm transition-all duration-200 ${hasError
+                    ? 'border-red-300 focus:ring-red-500 focus:border-red-500 hover:border-red-400'
+                    : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500 hover:border-gray-400'
+                    } hover:shadow-sm`}
                   placeholder="Enter your password"
                 />
                 <button

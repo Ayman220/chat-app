@@ -22,6 +22,7 @@ const Register: React.FC = () => {
 
   useEffect(() => {
     if (isAuthenticated) {
+      toast.success('Account created successfully!');
       navigate('/');
     }
   }, [isAuthenticated, navigate]);

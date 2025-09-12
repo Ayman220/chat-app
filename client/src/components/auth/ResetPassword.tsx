@@ -11,7 +11,7 @@ const ResetPassword: React.FC = () => {
   const { loading, error } = useSelector((state: RootState) => state.auth);
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  
+
   const [formData, setFormData] = useState({
     password: '',
     confirmPassword: ''
@@ -45,7 +45,7 @@ const ResetPassword: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!formData.password || !formData.confirmPassword) {
       toast.error('Please fill in all fields');
       return;
@@ -65,9 +65,12 @@ const ResetPassword: React.FC = () => {
       toast.error('Invalid reset token');
       return;
     }
-    
-    await dispatch(resetPassword({ token, password: formData.password }));
-    setIsSubmitted(true);
+
+    const result = await dispatch(resetPassword({ token, password: formData.password }));
+    if (resetPassword.fulfilled.match(result)) {
+      toast.success('Password reset successfully!');
+      setIsSubmitted(true);
+    }
   };
 
   if (!token) {
@@ -85,7 +88,7 @@ const ResetPassword: React.FC = () => {
             <ArrowLeft size={16} className="mr-1" />
             Back to login
           </Link>
-          
+
           <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
             Reset your password
           </h2>
@@ -93,7 +96,7 @@ const ResetPassword: React.FC = () => {
             Enter your new password below.
           </p>
         </div>
-        
+
         {!isSubmitted ? (
           <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
             <div className="space-y-4">
