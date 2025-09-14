@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { fetchMessages, sendMessage, markAllMessagesAsRead, setMessageDelivered, updateMessage } from '../../store/slices/messageSlice';
+import { fetchMessages, sendMessage, markAllMessagesAsRead, setMessageDelivered, updateMessage, setTyping } from '../../store/slices/messageSlice';
 import { addMessage } from '../../store/slices/messageSlice';
 import socketService from '../../services/socket';
 import LoadingSpinner from '../common/LoadingSpinner';
+import TypingIndicator from './TypingIndicator';
 import { IoCheckmarkDone, IoCheckmark, IoSend, IoAttach } from 'react-icons/io5';
 import { RootState, AppDispatch } from '../../store';
 
@@ -11,7 +12,7 @@ const ChatWindow: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
   const { currentChat } = useSelector((state: RootState) => state.chat);
   const { user } = useSelector((state: RootState) => state.auth);
-  const { messages, loading, sending } = useSelector((state: RootState) => state.message);
+  const { messages, loading, sending, typing } = useSelector((state: RootState) => state.message);
   const [input, setInput] = useState<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [page, setPage] = useState<number>(1);
@@ -20,6 +21,7 @@ const ChatWindow: React.FC = () => {
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const prevMessagesLength = useRef<number>(0);
   const prevFirstMsgId = useRef<{ id: string | null; chatId: string | null; lastMsgId: string | null } | null>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Move chatMessages declaration here so it's available for all hooks and logic
   const chatMessages = messages[currentChat?.id || ''] || [];
@@ -33,8 +35,23 @@ const ChatWindow: React.FC = () => {
       setHasMore(true);
       dispatch(fetchMessages({ chatId: currentChat.id, page: 1, limit: PAGE_SIZE }));
       dispatch(markAllMessagesAsRead(currentChat.id));
+
+      // Clear typing timeout when chat changes
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = null;
+      }
     }
   }, [currentChat, dispatch]);
+
+  // Cleanup typing timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Scroll to bottom after initial load (only once per chat)
   const lastScrolledChatId = useRef<string | null>(null);
@@ -238,6 +255,32 @@ const ChatWindow: React.FC = () => {
     return () => { socket.off('message:delivered', handler); };
   }, [currentChat, dispatch]);
 
+  // Listen for typing events
+  useEffect(() => {
+    const socket = socketService.getSocket();
+    if (!socket || !currentChat) return;
+
+    const handleTypingStart = (data: any) => {
+      if (data.chatId === currentChat.id && data.userId !== user?.id) {
+        dispatch(setTyping({ chatId: data.chatId, userId: data.userId, isTyping: true }));
+      }
+    };
+
+    const handleTypingStop = (data: any) => {
+      if (data.chatId === currentChat.id && data.userId !== user?.id) {
+        dispatch(setTyping({ chatId: data.chatId, userId: data.userId, isTyping: false }));
+      }
+    };
+
+    socket.on('typing_start', handleTypingStart);
+    socket.on('typing_stop', handleTypingStop);
+
+    return () => {
+      socket.off('typing_start', handleTypingStart);
+      socket.off('typing_stop', handleTypingStop);
+    };
+  }, [currentChat, dispatch, user?.id]);
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || !currentChat) return;
@@ -258,6 +301,29 @@ const ChatWindow: React.FC = () => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend(e as any);
+    }
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setInput(e.target.value);
+
+    // Handle typing indicators
+    if (currentChat && user) {
+      const socket = socketService.getSocket();
+      if (socket) {
+        // Emit typing start
+        socket.emit('typing_start', { chatId: currentChat.id, userId: user.id });
+
+        // Clear existing timeout
+        if (typingTimeoutRef.current) {
+          clearTimeout(typingTimeoutRef.current);
+        }
+
+        // Set timeout to stop typing after 1 second of inactivity
+        typingTimeoutRef.current = setTimeout(() => {
+          socket.emit('typing_stop', { chatId: currentChat.id, userId: user.id });
+        }, 1000);
+      }
     }
   };
 
@@ -291,7 +357,10 @@ const ChatWindow: React.FC = () => {
 
       {/* Messages Area */}
       <div
-        className="flex-1 p-4 overflow-y-auto min-h-0 bg-white mx-4 my-4 rounded-2xl shadow-sm"
+        className={`flex-1 p-4 overflow-y-auto min-h-0 bg-white mx-4 mt-4 ${currentChat && typing[currentChat.id] && typing[currentChat.id].length > 0
+          ? 'mb-0 rounded-t-2xl'
+          : 'mb-4 rounded-2xl'
+          } shadow-sm`}
         ref={messagesContainerRef}
         onScroll={handleScroll}
       >
@@ -389,6 +458,17 @@ const ChatWindow: React.FC = () => {
         </div>
       </div>
 
+      {/* Typing Indicator - Fixed between messages and input */}
+      {currentChat && typing[currentChat.id] && typing[currentChat.id].length > 0 && (
+        <div className="mx-4 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
+          <TypingIndicator
+            typingUsers={typing[currentChat.id] || []}
+            currentUserId={user?.id}
+            otherParticipantName={currentChat.type === 'private' ? currentChat.other_participant?.name : undefined}
+          />
+        </div>
+      )}
+
       {/* Message Input */}
       <div className="p-4 bg-white border-t border-gray-200 flex-shrink-0">
         <div className="flex items-center space-x-3">
@@ -398,7 +478,7 @@ const ChatWindow: React.FC = () => {
               type="text"
               placeholder="Write a message"
               value={input}
-              onChange={e => setInput(e.target.value)}
+              onChange={handleInputChange}
               onKeyPress={handleKeyPress}
               disabled={sending}
               className="w-full px-4 py-3 pr-20 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"

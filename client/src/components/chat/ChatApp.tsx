@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useParams, useNavigate } from 'react-router-dom';
 import { fetchChats, getChatById } from '../../store/slices/chatSlice';
-import { addOnlineUser, removeOnlineUser } from '../../store/slices/uiSlice';
+import { addOnlineUser, removeOnlineUser, setOnlineUsers, setLastSeen } from '../../store/slices/uiSlice';
+import { fetchLastSeenData } from '../../services/api';
 import socketService from '../../services/socket';
 import Sidebar from './Sidebar';
 import ChatWindow from './ChatWindow';
@@ -30,6 +31,13 @@ const ChatApp: React.FC = () => {
 
       socket.on('user:offline', (data: any) => {
         dispatch(removeOnlineUser(data.userId));
+        if (data.lastSeen) {
+          dispatch(setLastSeen({ userId: data.userId, lastSeen: data.lastSeen }));
+        }
+      });
+
+      socket.on('users:online', (data: any) => {
+        dispatch(setOnlineUsers(data));
       });
     } else {
       const token = localStorage.getItem('token');
@@ -43,6 +51,37 @@ const ChatApp: React.FC = () => {
   useEffect(() => {
     dispatch(fetchChats());
   }, [dispatch]);
+
+  // Fetch last seen data for all users in chats
+  useEffect(() => {
+    const fetchLastSeenForChats = async () => {
+      if (chats.length === 0) return;
+
+      try {
+        // Collect all user IDs from chats
+        const userIds = new Set<string>();
+        chats.forEach(chat => {
+          if (chat.type === 'private' && chat.other_participant?.id) {
+            userIds.add(chat.other_participant.id);
+          }
+          // For group chats, we could add all participants here if needed
+        });
+
+        if (userIds.size > 0) {
+          const lastSeenData = await fetchLastSeenData(Array.from(userIds));
+
+          // Update Redux state with fetched last seen data
+          Object.entries(lastSeenData).forEach(([userId, lastSeen]) => {
+            dispatch(setLastSeen({ userId, lastSeen: lastSeen as string }));
+          });
+        }
+      } catch (error) {
+        console.error('Error fetching last seen data:', error);
+      }
+    };
+
+    fetchLastSeenForChats();
+  }, [chats, dispatch]);
 
   // Handle chat selection from URL
   useEffect(() => {

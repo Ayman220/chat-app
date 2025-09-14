@@ -58,11 +58,24 @@ export const initializeSocket = (io: Server): void => {
         user: socket.user
       });
 
-      // Broadcast user online status
+      // Broadcast user online status to other users
       socket.broadcast.emit('user:online', {
         userId: socket.user.id,
         user: socket.user
       });
+
+      // Send current online users to the newly connected user
+      const currentOnlineUsers = Array.from(connectedUsers.values()).map(connectedUser => ({
+        id: connectedUser.user.id,
+        name: connectedUser.user.name,
+        email: connectedUser.user.email,
+        avatar: connectedUser.user.avatar,
+        status: connectedUser.user.status,
+        created_at: connectedUser.user.created_at,
+        updated_at: connectedUser.user.updated_at
+      }));
+
+      socket.emit('users:online', currentOnlineUsers);
 
       // Mark all received messages as delivered for this user
       markAllMessagesAsDeliveredForUser(socket.user.id).catch(error => {
@@ -177,14 +190,25 @@ export const initializeSocket = (io: Server): void => {
     // The updateMessageDeliveryStatus function handles delivery status updates directly
 
     // Handle disconnect
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
       if (socket.user) {
         // Remove user from connected users
         connectedUsers.delete(socket.user.id);
 
-        // Broadcast user offline status
+        // Update last_seen in database
+        try {
+          await pool.query(
+            'UPDATE users SET last_seen = CURRENT_TIMESTAMP WHERE id = $1',
+            [socket.user.id]
+          );
+        } catch (error) {
+          console.error('Error updating last_seen:', error);
+        }
+
+        // Broadcast user offline status with last seen timestamp
         socket.broadcast.emit('user:offline', {
-          userId: socket.user.id
+          userId: socket.user.id,
+          lastSeen: new Date().toISOString()
         });
       }
     });

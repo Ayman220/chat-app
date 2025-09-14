@@ -35,6 +35,7 @@ export const createTables = async (): Promise<void> => {
         password VARCHAR(255) NOT NULL,
         avatar VARCHAR(500),
         status VARCHAR(100) DEFAULT 'online',
+        last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )

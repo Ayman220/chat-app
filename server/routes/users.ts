@@ -162,6 +162,50 @@ router.put('/profile', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// Get last seen data for specific users
+router.post('/last-seen', async (req: AuthRequest, res: Response): Promise<Response> => {
+  try {
+    const userId = req.user?.id;
+    const { userIds } = req.body;
 
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: 'User not authenticated'
+      } as ApiResponse);
+    }
+
+    if (!userIds || !Array.isArray(userIds)) {
+      return res.status(400).json({
+        success: false,
+        error: 'userIds array is required'
+      } as ApiResponse);
+    }
+
+    // Get last seen data for the requested users
+    const placeholders = userIds.map((_, index) => `$${index + 1}`).join(',');
+    const { rows } = await pool.query(
+      `SELECT id, last_seen FROM users WHERE id IN (${placeholders})`,
+      userIds
+    );
+
+    // Convert to object format for easy lookup
+    const lastSeenData = rows.reduce((acc: any, row: any) => {
+      acc[row.id] = row.last_seen;
+      return acc;
+    }, {});
+
+    return res.json({
+      success: true,
+      data: lastSeenData
+    } as ApiResponse);
+  } catch (error: any) {
+    console.error('Error fetching last seen data:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch last seen data'
+    } as ApiResponse);
+  }
+});
 
 export default router; 

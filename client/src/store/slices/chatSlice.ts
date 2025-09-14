@@ -76,6 +76,12 @@ const chatSlice = createSlice({
     clearError: (state) => {
       state.error = null;
     },
+    resetChatState: (state) => {
+      state.chats = [];
+      state.currentChat = null;
+      state.loading = false;
+      state.error = null;
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -122,5 +128,5 @@ const chatSlice = createSlice({
   },
 });
 
-export const { setCurrentChat, addChat, updateChat, removeChat, clearError } = chatSlice.actions;
+export const { setCurrentChat, addChat, updateChat, removeChat, clearError, resetChatState } = chatSlice.actions;
 export default chatSlice.reducer; 

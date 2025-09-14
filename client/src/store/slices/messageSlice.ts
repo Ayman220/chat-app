@@ -8,6 +8,7 @@ const initialState: MessageState = {
   loading: false,
   sending: false,
   error: null,
+  typing: {},
 };
 
 // Async thunks
@@ -117,6 +118,30 @@ const messageSlice = createSlice({
     clearError: (state) => {
       state.error = null;
     },
+    setTyping: (state, action: PayloadAction<{ chatId: string; userId: string; isTyping: boolean }>) => {
+      const { chatId, userId, isTyping } = action.payload;
+
+      if (!state.typing[chatId]) {
+        state.typing[chatId] = [];
+      }
+
+      if (isTyping) {
+        // Add user to typing list if not already there
+        if (!state.typing[chatId].includes(userId)) {
+          state.typing[chatId].push(userId);
+        }
+      } else {
+        // Remove user from typing list
+        state.typing[chatId] = state.typing[chatId].filter(id => id !== userId);
+      }
+    },
+    resetMessageState: (state) => {
+      state.messages = {};
+      state.loading = false;
+      state.sending = false;
+      state.error = null;
+      state.typing = {};
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -173,5 +198,5 @@ const messageSlice = createSlice({
   },
 });
 
-export const { addMessage, updateMessage, setMessageDelivered, clearMessages, clearError } = messageSlice.actions;
+export const { addMessage, updateMessage, setMessageDelivered, clearMessages, clearError, setTyping, resetMessageState } = messageSlice.actions;
 export default messageSlice.reducer; 

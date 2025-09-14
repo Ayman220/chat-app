@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
-import { useSelector } from 'react-redux';
+import React, { useState, useEffect, useRef } from 'react';
+import { useSelector, useDispatch } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { Menu, User, LogOut, Settings, Bell } from 'lucide-react';
-import { RootState } from '../../store';
+import { RootState, AppDispatch } from '../../store';
+import { formatLastSeen } from '../../utils/timeUtils';
+import { performLogout } from '../../store/actions/logout';
 
 interface HeaderProps {
   onMenuClick?: () => void;
@@ -10,19 +12,57 @@ interface HeaderProps {
 }
 
 const Header: React.FC<HeaderProps> = ({ onMenuClick, showMenuButton = true }) => {
+  const dispatch = useDispatch<AppDispatch>();
   const { user } = useSelector((state: RootState) => state.auth);
   const { currentChat } = useSelector((state: RootState) => state.chat);
+  const { onlineUsers, lastSeen } = useSelector((state: RootState) => state.ui);
   const navigate = useNavigate();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [currentTime, setCurrentTime] = useState(Date.now());
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   const handleLogout = () => {
-    localStorage.removeItem('token');
+    dispatch(performLogout());
     navigate('/login');
   };
 
   const handleProfileClick = () => {
     setShowProfileMenu(!showProfileMenu);
   };
+
+  // Real-time last seen timer
+  useEffect(() => {
+    // Clear existing timer
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+
+    // Only start timer if we have a private chat with last seen data
+    const shouldStartTimer = currentChat?.type === 'private' &&
+      currentChat.other_participant?.id &&
+      !onlineUsers.some(u => u.id === currentChat.other_participant?.id) &&
+      lastSeen[currentChat.other_participant.id];
+
+    if (shouldStartTimer) {
+      // Update every minute (60000ms)
+      timerRef.current = setInterval(() => {
+        setCurrentTime(Date.now());
+      }, 60000);
+    }
+
+    // Cleanup timer on unmount or when dependencies change
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [currentChat, onlineUsers, lastSeen]);
+
+  // Update current time when component mounts or chat changes
+  useEffect(() => {
+    setCurrentTime(Date.now());
+  }, [currentChat]);
 
   return (
     <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between shadow-sm">
@@ -57,9 +97,20 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick, showMenuButton = true }) =
                 }
               </h1>
               {currentChat.type === 'private' && (
-                <p className="text-sm text-gray-500">
-                  {currentChat.other_participant?.status || 'offline'}
-                </p>
+                <div className="flex items-center space-x-2">
+                  <div className={`w-2 h-2 rounded-full ${currentChat.other_participant?.id && onlineUsers.some(u => u.id === currentChat.other_participant?.id)
+                    ? 'bg-green-500'
+                    : 'bg-gray-400'
+                    }`}></div>
+                  <p className="text-sm text-gray-500">
+                    {currentChat.other_participant?.id && onlineUsers.some(u => u.id === currentChat.other_participant?.id)
+                      ? 'online'
+                      : currentChat.other_participant?.id && lastSeen[currentChat.other_participant.id]
+                        ? `last seen ${formatLastSeen(lastSeen[currentChat.other_participant.id], currentTime)}`
+                        : 'offline'
+                    }
+                  </p>
+                </div>
               )}
             </div>
           </div>

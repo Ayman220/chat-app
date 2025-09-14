@@ -59,6 +59,7 @@ export interface MessageState {
   loading: boolean;
   sending: boolean;
   error: string | null;
+  typing: { [chatId: string]: string[] }; // chatId -> array of user IDs who are typing
 }
 
 // UI state types
@@ -66,6 +67,7 @@ export interface UIState {
   theme: 'light' | 'dark';
   onlineUsers: User[];
   sidebarOpen: boolean;
+  lastSeen: { [userId: string]: string }; // userId -> lastSeen timestamp
 }
 
 // Root state type
@@ -115,6 +117,7 @@ export interface SocketEvents {
   };
   'user:offline': {
     userId: string;
+    lastSeen: string;
   };
   'message:read': {
     chatId: string;
@@ -126,6 +129,7 @@ export interface SocketEvents {
     messageId: string;
     delivered: string;
   };
+  'users:online': User[];
 }
 
 // Form types

@@ -104,6 +104,22 @@ const authSlice = createSlice({
       // Disconnect socket on logout
       socketService.disconnect();
     },
+    clearAllState: (state) => {
+      // Reset auth state
+      state.user = null;
+      state.token = null;
+      state.isAuthenticated = false;
+      state.loading = false;
+      state.initialLoading = false;
+      state.error = null;
+
+      // Clear localStorage
+      localStorage.removeItem('token');
+      localStorage.removeItem('lastSeenData');
+
+      // Disconnect socket
+      socketService.disconnect();
+    },
     clearError: (state) => {
       state.error = null;
     },
@@ -186,5 +202,5 @@ const authSlice = createSlice({
   },
 });
 
-export const { logout, clearError, setUser } = authSlice.actions;
+export const { logout, clearAllState, clearError, setUser } = authSlice.actions;
 export default authSlice.reducer; 
