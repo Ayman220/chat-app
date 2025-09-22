@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useParams, useNavigate } from 'react-router-dom';
-import { fetchChats, getChatById } from '../../store/slices/chatSlice';
+import { fetchChats, getChatById, newChatNotification } from '../../store/slices/chatSlice';
 import { addOnlineUser, removeOnlineUser, setOnlineUsers, setLastSeen } from '../../store/slices/uiSlice';
 import { fetchLastSeenData } from '../../services/api';
 import socketService from '../../services/socket';
@@ -10,6 +10,7 @@ import ChatWindow from './ChatWindow';
 import Header from './Header';
 import LoadingSpinner from '../common/LoadingSpinner';
 import { RootState, AppDispatch } from '../../store';
+import { showToast } from '../common/CustomToast';
 
 const ChatApp: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
@@ -39,13 +40,30 @@ const ChatApp: React.FC = () => {
       socket.on('users:online', (data: any) => {
         dispatch(setOnlineUsers(data));
       });
+
+      // Listen for new chat notifications
+      socket.on('new_chat_notification', (data: any) => {
+        dispatch(newChatNotification(data));
+
+        // Show toast notification
+        const chatName = data.chatType === 'direct'
+          ? data.chatDetails.otherParticipant?.name || 'Unknown User'
+          : data.chatDetails.name || 'New Group';
+
+        showToast({
+          message: `New chat: ${chatName}`,
+          onClick: () => navigate(`/chat/${data.chatId}`),
+          duration: 4000,
+          type: 'success'
+        });
+      });
     } else {
       const token = localStorage.getItem('token');
       if (token) {
         socketService.connect(token);
       }
     }
-  }, [dispatch]);
+  }, [dispatch, navigate]);
 
   // Fetch chats on mount
   useEffect(() => {

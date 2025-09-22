@@ -22,6 +22,19 @@ export interface Chat {
   updated_at: string;
 }
 
+// New chat notification types
+export interface NewChatDetails {
+  id: string;
+  type: 'direct' | 'group';
+  name?: string;
+  description?: string;
+  avatar?: string;
+  created_at: string;
+  updated_at: string;
+  otherParticipant?: User; // For direct chats
+  creator?: User; // For group chats
+}
+
 // Message types
 export interface Message {
   id: string;
@@ -130,6 +143,11 @@ export interface SocketEvents {
     delivered: string;
   };
   'users:online': User[];
+  'new_chat_notification': {
+    chatId: string;
+    chatType: 'direct' | 'group';
+    chatDetails: NewChatDetails;
+  };
 }
 
 // Form types

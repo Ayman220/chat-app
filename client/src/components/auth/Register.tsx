@@ -3,7 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { Link, useNavigate } from 'react-router-dom';
 import { register, clearError } from '../../store/slices/authSlice';
 import { RootState, AppDispatch } from '../../store';
-import toast from 'react-hot-toast';
+import { showToast } from '../common/CustomToast';
 import { FiEye, FiEyeOff, FiLock, FiMail, FiUser } from 'react-icons/fi';
 
 const Register: React.FC = () => {
@@ -22,14 +22,20 @@ const Register: React.FC = () => {
 
   useEffect(() => {
     if (isAuthenticated) {
-      toast.success('Account created successfully!');
+      showToast({
+        message: 'Account created successfully!',
+        type: 'success'
+      });
       navigate('/');
     }
   }, [isAuthenticated, navigate]);
 
   useEffect(() => {
     if (error) {
-      toast.error(error);
+      showToast({
+        message: error,
+        type: 'error'
+      });
       dispatch(clearError());
     }
   }, [error, dispatch]);
@@ -45,17 +51,26 @@ const Register: React.FC = () => {
     e.preventDefault();
 
     if (!formData.name || !formData.email || !formData.password || !formData.confirmPassword) {
-      toast.error('Please fill in all fields');
+      showToast({
+        message: 'Please fill in all fields',
+        type: 'error'
+      });
       return;
     }
 
     if (formData.password !== formData.confirmPassword) {
-      toast.error('Passwords do not match');
+      showToast({
+        message: 'Passwords do not match',
+        type: 'error'
+      });
       return;
     }
 
     if (formData.password.length < 6) {
-      toast.error('Password must be at least 6 characters long');
+      showToast({
+        message: 'Password must be at least 6 characters long',
+        type: 'error'
+      });
       return;
     }
 

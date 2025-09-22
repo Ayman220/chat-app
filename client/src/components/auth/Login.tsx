@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { FiEye, FiEyeOff, FiMail, FiLock } from 'react-icons/fi';
 import { login, clearError } from '../../store/slices/authSlice';
 import { RootState, AppDispatch } from '../../store';
-import toast from 'react-hot-toast';
+import { showToast } from '../common/CustomToast';
 
 const Login: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
@@ -21,7 +21,10 @@ const Login: React.FC = () => {
   useEffect(() => {
     if (error) {
       setHasError(true);
-      toast.error(error);
+      showToast({
+        message: error,
+        type: 'error'
+      });
       dispatch(clearError());
     } else {
       setHasError(false);
@@ -30,7 +33,10 @@ const Login: React.FC = () => {
 
   useEffect(() => {
     if (isAuthenticated) {
-      toast.success('Welcome back!');
+      showToast({
+        message: 'Welcome back!',
+        type: 'success'
+      });
       navigate('/');
     }
   }, [isAuthenticated, navigate]);
@@ -49,7 +55,10 @@ const Login: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.email || !formData.password) {
-      toast.error('Please fill in all fields');
+      showToast({
+        message: 'Please fill in all fields',
+        type: 'error'
+      });
       return;
     }
 

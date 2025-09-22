@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { Mail, ArrowLeft } from 'lucide-react';
 import { forgotPassword, clearError } from '../../store/slices/authSlice';
 import { RootState, AppDispatch } from '../../store';
-import toast from 'react-hot-toast';
+import { showToast } from '../common/CustomToast';
 
 const ForgotPassword: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
@@ -15,7 +15,10 @@ const ForgotPassword: React.FC = () => {
 
   useEffect(() => {
     if (error) {
-      toast.error(error);
+      showToast({
+        message: error,
+        type: 'error'
+      });
       dispatch(clearError());
     }
   }, [error, dispatch]);
@@ -24,19 +27,28 @@ const ForgotPassword: React.FC = () => {
     e.preventDefault();
 
     if (!email) {
-      toast.error('Please enter your email address');
+      showToast({
+        message: 'Please enter your email address',
+        type: 'error'
+      });
       return;
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
-      toast.error('Please enter a valid email address');
+      showToast({
+        message: 'Please enter a valid email address',
+        type: 'error'
+      });
       return;
     }
 
     const result = await dispatch(forgotPassword(email));
     if (forgotPassword.fulfilled.match(result)) {
-      toast.success('Password reset email sent successfully!');
+      showToast({
+        message: 'Password reset email sent successfully!',
+        type: 'success'
+      });
       setIsSubmitted(true);
     }
   };

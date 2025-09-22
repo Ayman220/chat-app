@@ -4,7 +4,7 @@ import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, Lock, ArrowLeft } from 'lucide-react';
 import { resetPassword, clearError } from '../../store/slices/authSlice';
 import { RootState, AppDispatch } from '../../store';
-import toast from 'react-hot-toast';
+import { showToast } from '../common/CustomToast';
 
 const ResetPassword: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
@@ -24,14 +24,20 @@ const ResetPassword: React.FC = () => {
 
   useEffect(() => {
     if (!token) {
-      toast.error('Invalid reset link');
+      showToast({
+        message: 'Invalid reset link',
+        type: 'error'
+      });
       navigate('/login');
     }
   }, [token, navigate]);
 
   useEffect(() => {
     if (error) {
-      toast.error(error);
+      showToast({
+        message: error,
+        type: 'error'
+      });
       dispatch(clearError());
     }
   }, [error, dispatch]);
@@ -47,28 +53,43 @@ const ResetPassword: React.FC = () => {
     e.preventDefault();
 
     if (!formData.password || !formData.confirmPassword) {
-      toast.error('Please fill in all fields');
+      showToast({
+        message: 'Please fill in all fields',
+        type: 'error'
+      });
       return;
     }
 
     if (formData.password !== formData.confirmPassword) {
-      toast.error('Passwords do not match');
+      showToast({
+        message: 'Passwords do not match',
+        type: 'error'
+      });
       return;
     }
 
     if (formData.password.length < 6) {
-      toast.error('Password must be at least 6 characters long');
+      showToast({
+        message: 'Password must be at least 6 characters long',
+        type: 'error'
+      });
       return;
     }
 
     if (!token) {
-      toast.error('Invalid reset token');
+      showToast({
+        message: 'Invalid reset token',
+        type: 'error'
+      });
       return;
     }
 
     const result = await dispatch(resetPassword({ token, password: formData.password }));
     if (resetPassword.fulfilled.match(result)) {
-      toast.success('Password reset successfully!');
+      showToast({
+        message: 'Password reset successfully!',
+        type: 'success'
+      });
       setIsSubmitted(true);
     }
   };

@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { AuthRequest, UserWithoutPassword, ApiResponse } from '../types';
 import { PrismaClient } from '../generated/prisma';
+import { emitNewChatCreated } from '../socket/socketManager';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -483,6 +484,9 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         last_message: null
       };
 
+      // Notify the recipient about the new chat
+      await emitNewChatCreated(chatId, otherUserId, 'direct');
+
     } else if (type === 'group') {
       // Create new group chat
       chatId = uuidv4();
@@ -515,6 +519,11 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         last_message_time: null,
         last_message: null
       };
+
+      // Notify all participants except the creator about the new group chat
+      for (const participantId of participants) {
+        await emitNewChatCreated(chatId, participantId, 'group');
+      }
     } else {
       return res.status(400).json({
         success: false,

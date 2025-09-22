@@ -184,9 +184,6 @@ export const initializeSocket = (io: Server): void => {
       }
     });
 
-    // Handle message delivered - This handler is removed to prevent circular delivery marking
-    // The updateMessageDeliveryStatus function handles delivery status updates directly
-
     // Handle disconnect
     socket.on('disconnect', async () => {
       if (socket.user) {
@@ -370,6 +367,110 @@ const updateDeliveryStatusForUser = async (chatId: string, userId: string): Prom
   }
 };
 
+// Helper function to notify a user about a new chat
+export const notifyUserAboutNewChat = async (userId: string, chatId: string, chatType: 'direct' | 'group'): Promise<void> => {
+  try {
+    // Check if the user is online
+    const connectedUser = connectedUsers.get(userId);
+    if (!connectedUser) {
+      return;
+    }
+
+    // Verify the socket is still connected
+    const socket = globalIo.sockets.sockets.get(connectedUser.socketId);
+    if (!socket || !socket.connected) {
+      return;
+    }
+
+    // Get chat details for the notification
+    let chatDetails: any = null;
+
+    if (chatType === 'direct') {
+      // Get direct chat details with participant info
+      const directChat = await prisma.directChat.findUnique({
+        where: { id: chatId },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatar: true,
+              status: true,
+              created_at: true,
+              updated_at: true
+            }
+          },
+          recipient: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatar: true,
+              status: true,
+              created_at: true,
+              updated_at: true
+            }
+          }
+        }
+      });
+
+      if (directChat) {
+        chatDetails = {
+          id: directChat.id,
+          type: 'direct',
+          created_at: directChat.created_at,
+          updated_at: directChat.updated_at,
+          // Include the other participant's info
+          otherParticipant: directChat.sender.id === userId ? directChat.recipient : directChat.sender
+        };
+      }
+    } else {
+      // Get group chat details
+      const groupChat = await prisma.groupChat.findUnique({
+        where: { id: chatId },
+        include: {
+          creator: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatar: true,
+              status: true,
+              created_at: true,
+              updated_at: true
+            }
+          }
+        }
+      });
+
+      if (groupChat) {
+        chatDetails = {
+          id: groupChat.id,
+          type: 'group',
+          name: groupChat.name,
+          description: groupChat.description,
+          avatar: groupChat.avatar,
+          created_at: groupChat.created_at,
+          updated_at: groupChat.updated_at,
+          creator: groupChat.creator
+        };
+      }
+    }
+
+    if (chatDetails) {
+      // Emit new chat notification to the user
+      socket.emit('new_chat_notification', {
+        chatId: chatId,
+        chatType: chatType,
+        chatDetails: chatDetails
+      });
+    }
+  } catch (error: any) {
+    console.error('Error notifying user about new chat:', error);
+  }
+};
+
 // Helper function to get online users
 export const getOnlineUsers = (): UserWithoutPassword[] => {
   return Array.from(connectedUsers.values()).map(user => user.user);
@@ -389,6 +490,16 @@ export const getUserSocket = (userId: string, io: Server): Socket | null => {
 // Helper function to get global Io instance
 export const getGlobalIo = (): Server | undefined => {
   return globalIo;
+};
+
+// Helper function to emit new chat creation event
+export const emitNewChatCreated = async (chatId: string, recipientId: string, chatType: 'direct' | 'group'): Promise<void> => {
+  try {
+    // Directly notify the user about the new chat
+    await notifyUserAboutNewChat(recipientId, chatId, chatType);
+  } catch (error) {
+    console.error('Socket: Error emitting new chat created event:', error);
+  }
 };
 
 // Helper function to safely emit socket events

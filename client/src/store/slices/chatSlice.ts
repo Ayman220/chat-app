@@ -1,5 +1,5 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
-import { ChatState, Chat, ApiResponse, PaginatedResponse } from '../../types';
+import { ChatState, Chat, ApiResponse, NewChatDetails } from '../../types';
 import api from '../../services/api';
 
 const initialState: ChatState = {
@@ -82,6 +82,31 @@ const chatSlice = createSlice({
       state.loading = false;
       state.error = null;
     },
+    newChatNotification: (state, action: PayloadAction<{ chatId: string; chatType: 'direct' | 'group'; chatDetails: NewChatDetails }>) => {
+      const { chatId, chatType, chatDetails } = action.payload;
+
+      // Convert NewChatDetails to Chat format
+      const newChat: Chat = {
+        id: chatDetails.id,
+        name: chatDetails.name || undefined,
+        type: chatType === 'direct' ? 'private' : 'group',
+        participants: chatType === 'direct' && chatDetails.otherParticipant
+          ? [chatDetails.otherParticipant]
+          : [],
+        other_participant: chatType === 'direct' ? chatDetails.otherParticipant : undefined,
+        last_message: undefined,
+        unread_count: 0,
+        created_at: chatDetails.created_at,
+        updated_at: chatDetails.updated_at,
+      };
+
+      // Check if chat already exists
+      const existingChatIndex = state.chats.findIndex(chat => chat.id === chatId);
+      if (existingChatIndex === -1) {
+        // Add new chat to the beginning of the list
+        state.chats.unshift(newChat);
+      }
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -128,5 +153,5 @@ const chatSlice = createSlice({
   },
 });
 
-export const { setCurrentChat, addChat, updateChat, removeChat, clearError, resetChatState } = chatSlice.actions;
+export const { setCurrentChat, addChat, updateChat, removeChat, clearError, resetChatState, newChatNotification } = chatSlice.actions;
 export default chatSlice.reducer; 
