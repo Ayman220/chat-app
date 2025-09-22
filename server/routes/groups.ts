@@ -1,9 +1,10 @@
 import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import pool from '../database/config';
 import { AuthRequest, UserWithoutPassword, ApiResponse } from '../types';
+import { PrismaClient } from '../generated/prisma';
 
 const router = Router();
+const prisma = new PrismaClient();
 
 // Get group participants
 router.get('/:chatId/participants', async (req: AuthRequest, res: Response): Promise<Response> => {
@@ -19,12 +20,14 @@ router.get('/:chatId/participants', async (req: AuthRequest, res: Response): Pro
     }
 
     // Check if user is participant
-    const { rows: participants } = await pool.query(
-      'SELECT * FROM chat_participants WHERE chat_id = $1 AND user_id = $2',
-      [chatId, userId]
-    );
+    const userParticipant = await prisma.groupChatParticipant.findFirst({
+      where: {
+        group_chat_id: chatId,
+        user_id: userId
+      }
+    });
 
-    if (participants.length === 0) {
+    if (!userParticipant) {
       return res.status(403).json({
         success: false,
         error: 'Access denied'
@@ -32,26 +35,42 @@ router.get('/:chatId/participants', async (req: AuthRequest, res: Response): Pro
     }
 
     // Get all participants
-    const { rows: groupParticipants } = await pool.query(`
-      SELECT 
-        u.id,
-        u.name,
-        u.email,
-        u.avatar,
-        u.status,
-        u.created_at,
-        u.updated_at,
-        cp.role,
-        cp.joined_at
-      FROM users u
-      INNER JOIN chat_participants cp ON u.id = cp.user_id
-      WHERE cp.chat_id = $1
-      ORDER BY cp.joined_at ASC
-    `, [chatId]);
+    const groupParticipants = await prisma.groupChatParticipant.findMany({
+      where: {
+        group_chat_id: chatId
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatar: true,
+            status: true,
+            created_at: true,
+            updated_at: true
+          }
+        }
+      },
+      orderBy: { joined_at: 'asc' }
+    });
+
+    // Format participants
+    const formattedParticipants = groupParticipants.map(participant => ({
+      id: participant.user.id,
+      name: participant.user.name,
+      email: participant.user.email,
+      avatar: participant.user.avatar,
+      status: participant.user.status,
+      created_at: participant.user.created_at,
+      updated_at: participant.user.updated_at,
+      role: participant.role,
+      joined_at: participant.joined_at
+    }));
 
     return res.json({
       success: true,
-      data: groupParticipants
+      data: formattedParticipants
     } as ApiResponse<any[]>);
   } catch (error) {
     console.error('Get group participants error:', error);
@@ -84,14 +103,15 @@ router.post('/:chatId/participants', async (req: AuthRequest, res: Response) => 
     }
 
     // Check if user is admin
-    const { rows: participants } = await pool.query(
-      'SELECT role FROM chat_participants WHERE chat_id = $1 AND user_id = $2',
-      [chatId, userId]
-    );
+    const userParticipant = await prisma.groupChatParticipant.findFirst({
+      where: {
+        group_chat_id: chatId,
+        user_id: userId
+      },
+      select: { role: true }
+    });
 
-    const participant = participants[0];
-
-    if (!participant || participant.role !== 'admin') {
+    if (!userParticipant || userParticipant.role !== 'admin') {
       return res.status(403).json({
         success: false,
         error: 'Only admins can add participants'
@@ -99,14 +119,11 @@ router.post('/:chatId/participants', async (req: AuthRequest, res: Response) => 
     }
 
     // Check if chat is a group
-    const { rows: chats } = await pool.query(
-      'SELECT type FROM chats WHERE id = $1',
-      [chatId]
-    );
+    const groupChat = await prisma.groupChat.findUnique({
+      where: { id: chatId }
+    });
 
-    const chat = chats[0];
-
-    if (!chat || chat.type !== 'group') {
+    if (!groupChat) {
       return res.status(400).json({
         success: false,
         error: 'Can only add participants to group chats'
@@ -114,12 +131,14 @@ router.post('/:chatId/participants', async (req: AuthRequest, res: Response) => 
     }
 
     // Check if user already exists
-    const { rows: existingParticipants } = await pool.query(
-      'SELECT * FROM chat_participants WHERE chat_id = $1 AND user_id = $2',
-      [chatId, newUserId]
-    );
+    const existingParticipant = await prisma.groupChatParticipant.findFirst({
+      where: {
+        group_chat_id: chatId,
+        user_id: newUserId
+      }
+    });
 
-    if (existingParticipants.length > 0) {
+    if (existingParticipant) {
       return res.status(400).json({
         success: false,
         error: 'User is already a participant'
@@ -127,18 +146,35 @@ router.post('/:chatId/participants', async (req: AuthRequest, res: Response) => 
     }
 
     // Add participant
-    await pool.query(
-      'INSERT INTO chat_participants (id, chat_id, user_id, role) VALUES ($1, $2, $3, $4)',
-      [uuidv4(), chatId, newUserId, 'member']
-    );
+    await prisma.groupChatParticipant.create({
+      data: {
+        id: uuidv4(),
+        group_chat_id: chatId,
+        user_id: newUserId,
+        role: 'member'
+      }
+    });
 
     // Get added user info
-    const { rows: users } = await pool.query(
-      'SELECT id, name, email, avatar, status, created_at, updated_at FROM users WHERE id = $1',
-      [newUserId]
-    );
+    const user = await prisma.user.findUnique({
+      where: { id: newUserId },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        avatar: true,
+        status: true,
+        created_at: true,
+        updated_at: true
+      }
+    });
 
-    const user = users[0] as UserWithoutPassword;
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      } as ApiResponse);
+    }
 
     return res.status(201).json({
       success: true,
@@ -167,14 +203,15 @@ router.delete('/:chatId/participants/:participantId', async (req: AuthRequest, r
     }
 
     // Check if user is admin or removing themselves
-    const { rows: participants } = await pool.query(
-      'SELECT role FROM chat_participants WHERE chat_id = $1 AND user_id = $2',
-      [chatId, userId]
-    );
+    const userParticipant = await prisma.groupChatParticipant.findFirst({
+      where: {
+        group_chat_id: chatId,
+        user_id: userId
+      },
+      select: { role: true }
+    });
 
-    const participant = participants[0];
-
-    if (!participant) {
+    if (!userParticipant) {
       return res.status(403).json({
         success: false,
         error: 'Access denied'
@@ -182,7 +219,7 @@ router.delete('/:chatId/participants/:participantId', async (req: AuthRequest, r
     }
 
     // Only admins can remove others, users can remove themselves
-    if (participantId !== userId && participant.role !== 'admin') {
+    if (participantId !== userId && userParticipant.role !== 'admin') {
       return res.status(403).json({
         success: false,
         error: 'Only admins can remove other participants'
@@ -190,14 +227,11 @@ router.delete('/:chatId/participants/:participantId', async (req: AuthRequest, r
     }
 
     // Check if chat is a group
-    const { rows: chats } = await pool.query(
-      'SELECT type FROM chats WHERE id = $1',
-      [chatId]
-    );
+    const groupChat = await prisma.groupChat.findUnique({
+      where: { id: chatId }
+    });
 
-    const chat = chats[0];
-
-    if (!chat || chat.type !== 'group') {
+    if (!groupChat) {
       return res.status(400).json({
         success: false,
         error: 'Can only remove participants from group chats'
@@ -205,10 +239,12 @@ router.delete('/:chatId/participants/:participantId', async (req: AuthRequest, r
     }
 
     // Remove participant
-    await pool.query(
-      'DELETE FROM chat_participants WHERE chat_id = $1 AND user_id = $2',
-      [chatId, participantId]
-    );
+    await prisma.groupChatParticipant.deleteMany({
+      where: {
+        group_chat_id: chatId,
+        user_id: participantId
+      }
+    });
 
     return res.json({
       success: true,
@@ -245,14 +281,15 @@ router.put('/:chatId/participants/:participantId/role', async (req: AuthRequest,
     }
 
     // Check if user is admin
-    const { rows: participants } = await pool.query(
-      'SELECT role FROM chat_participants WHERE chat_id = $1 AND user_id = $2',
-      [chatId, userId]
-    );
+    const userParticipant = await prisma.groupChatParticipant.findFirst({
+      where: {
+        group_chat_id: chatId,
+        user_id: userId
+      },
+      select: { role: true }
+    });
 
-    const participant = participants[0];
-
-    if (!participant || participant.role !== 'admin') {
+    if (!userParticipant || userParticipant.role !== 'admin') {
       return res.status(403).json({
         success: false,
         error: 'Only admins can update roles'
@@ -260,14 +297,11 @@ router.put('/:chatId/participants/:participantId/role', async (req: AuthRequest,
     }
 
     // Check if chat is a group
-    const { rows: chats } = await pool.query(
-      'SELECT type FROM chats WHERE id = $1',
-      [chatId]
-    );
+    const groupChat = await prisma.groupChat.findUnique({
+      where: { id: chatId }
+    });
 
-    const chat = chats[0];
-
-    if (!chat || chat.type !== 'group') {
+    if (!groupChat) {
       return res.status(400).json({
         success: false,
         error: 'Can only update roles in group chats'
@@ -275,10 +309,13 @@ router.put('/:chatId/participants/:participantId/role', async (req: AuthRequest,
     }
 
     // Update role
-    await pool.query(
-      'UPDATE chat_participants SET role = $1 WHERE chat_id = $2 AND user_id = $3',
-      [role, chatId, participantId]
-    );
+    await prisma.groupChatParticipant.updateMany({
+      where: {
+        group_chat_id: chatId,
+        user_id: participantId
+      },
+      data: { role }
+    });
 
     return res.json({
       success: true,

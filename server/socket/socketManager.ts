@@ -1,7 +1,9 @@
 import { Server, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
-import pool from '../database/config';
 import { AuthenticatedSocket, JWTPayload, UserWithoutPassword, MessageWithSender } from '../types';
+import { PrismaClient } from '../generated/prisma';
+
+const prisma = new PrismaClient();
 
 interface ConnectedUser {
   userId: string;
@@ -28,12 +30,19 @@ export const initializeSocket = (io: Server): void => {
 
       try {
         // Get user from database
-        const { rows: users } = await pool.query(
-          'SELECT id, name, email, avatar, status, created_at, updated_at FROM users WHERE id = $1',
-          [decoded.userId]
-        );
-
-        const user = users[0] as UserWithoutPassword;
+        const user = await prisma.user.findUnique({
+          where: { id: decoded.userId },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatar: true,
+            status: true,
+            last_seen: true,
+            created_at: true,
+            updated_at: true
+          }
+        });
 
         if (!user) {
           return next(new Error('User not found'));
@@ -81,8 +90,6 @@ export const initializeSocket = (io: Server): void => {
       markAllMessagesAsDeliveredForUser(socket.user.id).catch(error => {
         console.error('Error in markAllMessagesAsDeliveredForUser:', error);
       });
-    } else {
-      console.log('No user found in socket connection');
     }
 
     // Join chat room
@@ -107,9 +114,6 @@ export const initializeSocket = (io: Server): void => {
     // Handle new message
     socket.on('new_message', async (data: { chatId: string; message: MessageWithSender }) => {
       try {
-        console.log('📨 NEW MESSAGE HANDLER - Message ID:', data.message.id, 'Chat:', data.chatId, 'Sender:', data.message.sender_id);
-        console.log('📨 CURRENT CONNECTED USERS:', Array.from(connectedUsers.keys()));
-
         // Broadcast message to all users in the chat
         socket.to(data.chatId).emit('new_message', data);
 
@@ -132,51 +136,45 @@ export const initializeSocket = (io: Server): void => {
     // Handle message read
     socket.on('message:read', async (data: { messageId: string }) => {
       try {
-        console.log('📖 MESSAGE READ - Message ID:', data.messageId);
-
         // First, try to find as direct message
-        const { rows: directMessages } = await pool.query(
-          'SELECT direct_chat_id as chat_id FROM direct_messages WHERE id = $1',
-          [data.messageId]
-        );
+        const directMessage = await prisma.directMessage.findUnique({
+          where: { id: data.messageId },
+          select: { direct_chat_id: true }
+        });
 
-        if (directMessages.length > 0) {
-          const message = directMessages[0];
-
+        if (directMessage) {
           // Update direct message read status
-          await pool.query(
-            'UPDATE direct_messages SET read = true WHERE id = $1',
-            [data.messageId]
-          );
+          await prisma.directMessage.update({
+            where: { id: data.messageId },
+            data: { read: true }
+          });
 
           // Broadcast read status
-          socket.to(message.chat_id).emit('message:read', {
-            chatId: message.chat_id,
+          socket.to(directMessage.direct_chat_id).emit('message:read', {
+            chatId: directMessage.direct_chat_id,
             messageId: data.messageId
           });
         } else {
           // Try to find as group message
-          const { rows: groupMessages } = await pool.query(
-            'SELECT group_chat_id as chat_id, read_by FROM group_messages WHERE id = $1',
-            [data.messageId]
-          );
+          const groupMessage = await prisma.groupMessage.findUnique({
+            where: { id: data.messageId },
+            select: { group_chat_id: true, readBy: true }
+          });
 
-          if (groupMessages.length > 0) {
-            const message = groupMessages[0];
-
+          if (groupMessage) {
             // Update group message read status
-            let readBy = message.read_by ? message.read_by : [];
-            if (!readBy.includes(socket.user?.id)) {
-              readBy.push(socket.user?.id);
-              await pool.query(
-                'UPDATE group_messages SET read_by = $1 WHERE id = $2',
-                [readBy, data.messageId]
-              );
+            let readBy = groupMessage.readBy ? groupMessage.readBy as string[] : [];
+            if (!readBy.includes(socket.user?.id || '')) {
+              readBy.push(socket.user?.id || '');
+              await prisma.groupMessage.update({
+                where: { id: data.messageId },
+                data: { readBy: readBy }
+              });
             }
 
             // Broadcast read status
-            socket.to(message.chat_id).emit('message:read', {
-              chatId: message.chat_id,
+            socket.to(groupMessage.group_chat_id).emit('message:read', {
+              chatId: groupMessage.group_chat_id,
               messageId: data.messageId
             });
           }
@@ -197,10 +195,10 @@ export const initializeSocket = (io: Server): void => {
 
         // Update last_seen in database
         try {
-          await pool.query(
-            'UPDATE users SET last_seen = CURRENT_TIMESTAMP WHERE id = $1',
-            [socket.user.id]
-          );
+          await prisma.user.update({
+            where: { id: socket.user.id },
+            data: { last_seen: new Date() }
+          });
         } catch (error) {
           console.error('Error updating last_seen:', error);
         }
@@ -218,73 +216,56 @@ export const initializeSocket = (io: Server): void => {
 // Helper function to update message delivery status
 const updateMessageDeliveryStatus = async (chatId: string, messageId: string, senderId: string): Promise<void> => {
   try {
-    console.log('📨 UPDATE MESSAGE DELIVERY - Chat ID:', chatId, 'Message ID:', messageId);
-
     // Check if it's a direct chat
-    const { rows: directChat } = await pool.query(
-      'SELECT id FROM direct_chats WHERE id = $1',
-      [chatId]
-    );
+    const directChat = await prisma.directChat.findUnique({
+      where: { id: chatId },
+      select: { sender_id: true, recipient_id: true }
+    });
 
-    if (directChat.length > 0) {
+    if (directChat) {
       // Handle direct chat participants
-      const { rows: directChatData } = await pool.query(
-        'SELECT user1_id, user2_id FROM direct_chats WHERE id = $1',
-        [chatId]
-      );
-
-      if (directChatData.length > 0) {
-        const { user1_id, user2_id } = directChatData[0];
-        const participantIds = [user1_id, user2_id];
-
-        // Find online participants by checking both connectedUsers map and actual socket connection
-        // IMPORTANT: Exclude the sender from delivery status - only recipients matter for delivery
-        const onlineParticipants = participantIds.filter(id => {
-          // Skip the sender - delivery status is only for recipients
-          if (id === senderId) return false;
-
-          const connectedUser = connectedUsers.get(id);
-          if (!connectedUser) return false;
-
-          // Verify the socket is still connected
-          const socket = globalIo.sockets.sockets.get(connectedUser.socketId);
-          return socket && socket.connected;
-        });
-
-        console.log('📨 DIRECT CHAT - Participants:', participantIds);
-        console.log('📨 DIRECT CHAT - Online participants:', onlineParticipants);
-        console.log('📨 DIRECT CHAT - Connected users map:', Array.from(connectedUsers.keys()));
-
-        // Update delivery status for direct messages
-        if (onlineParticipants.length > 0) {
-          console.log('📨 MARKING AS DELIVERED - Message ID:', messageId);
-          await pool.query(
-            'UPDATE direct_messages SET delivered = true WHERE id = $1',
-            [messageId]
-          );
-
-          // Emit delivery event to notify the sender
-          globalIo.to(chatId).emit('message:delivered', {
-            chatId: chatId,
-            messageId: messageId,
-            delivered: onlineParticipants[0] // For direct chat, there's only one recipient
-          });
-        } else {
-          console.log('📨 NOT MARKING AS DELIVERED - No online participants for message:', messageId);
-        }
-      }
-    } else {
-      // Handle group chat participants
-      const { rows: participants } = await pool.query(
-        'SELECT user_id FROM group_chat_participants WHERE group_chat_id = $1',
-        [chatId]
-      );
-
-      const participantIds = participants.map(p => p.user_id);
+      const participantIds = [directChat.sender_id, directChat.recipient_id];
 
       // Find online participants by checking both connectedUsers map and actual socket connection
       // IMPORTANT: Exclude the sender from delivery status - only recipients matter for delivery
-      const onlineParticipants = participantIds.filter(id => {
+      const onlineParticipants = participantIds.filter((id: string) => {
+        // Skip the sender - delivery status is only for recipients
+        if (id === senderId) return false;
+
+        const connectedUser = connectedUsers.get(id);
+        if (!connectedUser) return false;
+
+        // Verify the socket is still connected
+        const socket = globalIo.sockets.sockets.get(connectedUser.socketId);
+        return socket && socket.connected;
+      });
+
+      // Update delivery status for direct messages
+      if (onlineParticipants.length > 0) {
+        await prisma.directMessage.update({
+          where: { id: messageId },
+          data: { delivered: true }
+        });
+
+        // Emit delivery event to notify the sender
+        globalIo.to(chatId).emit('message:delivered', {
+          chatId: chatId,
+          messageId: messageId,
+          delivered: onlineParticipants[0] // For direct chat, there's only one recipient
+        });
+      }
+    } else {
+      // Handle group chat participants
+      const participants = await prisma.groupChatParticipant.findMany({
+        where: { group_chat_id: chatId },
+        select: { user_id: true }
+      });
+
+      const participantIds = participants.map((p: any) => p.user_id);
+
+      // Find online participants by checking both connectedUsers map and actual socket connection
+      // IMPORTANT: Exclude the sender from delivery status - only recipients matter for delivery
+      const onlineParticipants = participantIds.filter((id: string) => {
         // Skip the sender - delivery status is only for recipients
         if (id === senderId) return false;
 
@@ -298,13 +279,13 @@ const updateMessageDeliveryStatus = async (chatId: string, messageId: string, se
 
       // Update delivery status for group messages
       if (onlineParticipants.length > 0) {
-        await pool.query(
-          'UPDATE group_messages SET delivered_to = $1 WHERE id = $2',
-          [onlineParticipants, messageId]
-        );
+        await prisma.groupMessage.update({
+          where: { id: messageId },
+          data: { deliveredTo: onlineParticipants }
+        });
 
         // Emit delivery event for each online participant
-        onlineParticipants.forEach(participantId => {
+        onlineParticipants.forEach((participantId: string) => {
           globalIo.to(chatId).emit('message:delivered', {
             chatId: chatId,
             messageId: messageId,
@@ -321,27 +302,29 @@ const updateMessageDeliveryStatus = async (chatId: string, messageId: string, se
 // Helper function to update delivery status for a specific user when they join a chat
 const updateDeliveryStatusForUser = async (chatId: string, userId: string): Promise<void> => {
   try {
-    console.log('📨 UPDATE DELIVERY - Chat ID:', chatId, 'User ID:', userId);
-
     // Check if it's a direct chat
-    const { rows: directChat } = await pool.query(
-      'SELECT id FROM direct_chats WHERE id = $1',
-      [chatId]
-    );
+    const directChat = await prisma.directChat.findUnique({
+      where: { id: chatId },
+      select: { id: true }
+    });
 
-    if (directChat.length > 0) {
+    if (directChat) {
       // Handle direct messages
-      const { rows: messages } = await pool.query(
-        'SELECT id FROM direct_messages WHERE direct_chat_id = $1 AND sender_id != $2 AND delivered = false',
-        [chatId, userId]
-      );
+      const messages = await prisma.directMessage.findMany({
+        where: {
+          direct_chat_id: chatId,
+          sender_id: { not: userId },
+          delivered: false
+        },
+        select: { id: true }
+      });
 
       for (const message of messages) {
         // Mark as delivered
-        await pool.query(
-          'UPDATE direct_messages SET delivered = true WHERE id = $1',
-          [message.id]
-        );
+        await prisma.directMessage.update({
+          where: { id: message.id },
+          data: { delivered: true }
+        });
 
         // Emit delivery event to notify other users
         globalIo.to(chatId).emit('message:delivered', {
@@ -352,23 +335,26 @@ const updateDeliveryStatusForUser = async (chatId: string, userId: string): Prom
       }
     } else {
       // Handle group messages
-      const { rows: messages } = await pool.query(
-        'SELECT id, delivered_to FROM group_messages WHERE group_chat_id = $1 AND sender_id != $2',
-        [chatId, userId]
-      );
+      const messages = await prisma.groupMessage.findMany({
+        where: {
+          group_chat_id: chatId,
+          sender_id: { not: userId }
+        },
+        select: { id: true, deliveredTo: true }
+      });
 
       for (const message of messages) {
-        let delivered = message.delivered_to ? message.delivered_to : [];
+        let delivered = message.deliveredTo ? message.deliveredTo as string[] : [];
 
         // Check if user is not already in delivered_to
         if (!delivered.includes(userId)) {
           delivered.push(userId);
 
           // Update delivered_to array
-          await pool.query(
-            'UPDATE group_messages SET delivered_to = $1 WHERE id = $2',
-            [delivered, message.id]
-          );
+          await prisma.groupMessage.update({
+            where: { id: message.id },
+            data: { deliveredTo: delivered }
+          });
 
           // Emit delivery event to notify other users
           globalIo.to(chatId).emit('message:delivered', {
@@ -408,17 +394,12 @@ export const getGlobalIo = (): Server | undefined => {
 // Helper function to safely emit socket events
 export const safeEmit = (event: string, data: any, room?: string): void => {
   try {
-    console.log('📡 SOCKET safeEmit called:', { event, data, room });
-
     if (globalIo) {
       if (room) {
-        console.log('📡 Emitting to room:', room);
         globalIo.to(room).emit(event, data);
       } else {
-        console.log('📡 Emitting globally');
         globalIo.emit(event, data);
       }
-      console.log('📡 Event emitted successfully');
     } else {
       console.warn('Socket: No globalIo instance available');
     }
@@ -430,47 +411,53 @@ export const safeEmit = (event: string, data: any, room?: string): void => {
 // Helper function to mark all messages as delivered for a user when they log in
 export const markAllMessagesAsDeliveredForUser = async (userId: string): Promise<void> => {
   try {
-    console.log('📨 MARK DELIVERED - User ID:', userId);
-
     // Get all direct chats where the user is a participant
-    const { rows: directChats } = await pool.query(
-      'SELECT id as chat_id FROM direct_chats WHERE user1_id = $1 OR user2_id = $1',
-      [userId]
-    );
+    const directChats = await prisma.directChat.findMany({
+      where: {
+        OR: [
+          { sender_id: userId },
+          { recipient_id: userId }
+        ]
+      },
+      select: { id: true }
+    });
 
     // Get all group chats where the user is a participant
-    const { rows: groupChats } = await pool.query(
-      'SELECT group_chat_id as chat_id FROM group_chat_participants WHERE user_id = $1',
-      [userId]
-    );
+    const groupChats = await prisma.groupChatParticipant.findMany({
+      where: { user_id: userId },
+      select: { group_chat_id: true }
+    });
 
     // Combine all chats
-    const allChats = [...directChats, ...groupChats];
-
-    console.log('📨 MARK DELIVERED - Direct chats:', directChats.length);
-    console.log('📨 MARK DELIVERED - Group chats:', groupChats.length);
-    console.log('📨 MARK DELIVERED - Total chats:', allChats.length);
+    const allChats = [
+      ...directChats.map(chat => ({ chat_id: chat.id })),
+      ...groupChats.map(chat => ({ chat_id: chat.group_chat_id }))
+    ];
 
     for (const chat of allChats) {
       // Check if it's a direct chat
-      const { rows: directChat } = await pool.query(
-        'SELECT id FROM direct_chats WHERE id = $1',
-        [chat.chat_id]
-      );
+      const directChat = await prisma.directChat.findUnique({
+        where: { id: chat.chat_id },
+        select: { id: true }
+      });
 
-      if (directChat.length > 0) {
+      if (directChat) {
         // Handle direct messages
-        const { rows: messages } = await pool.query(
-          'SELECT id FROM direct_messages WHERE direct_chat_id = $1 AND sender_id != $2 AND delivered = false',
-          [chat.chat_id, userId]
-        );
+        const messages = await prisma.directMessage.findMany({
+          where: {
+            direct_chat_id: chat.chat_id,
+            sender_id: { not: userId },
+            delivered: false
+          },
+          select: { id: true }
+        });
 
         for (const message of messages) {
           // Mark as delivered
-          await pool.query(
-            'UPDATE direct_messages SET delivered = true WHERE id = $1',
-            [message.id]
-          );
+          await prisma.directMessage.update({
+            where: { id: message.id },
+            data: { delivered: true }
+          });
 
           // Emit delivery event to notify other users
           globalIo.to(chat.chat_id).emit('message:delivered', {
@@ -481,23 +468,26 @@ export const markAllMessagesAsDeliveredForUser = async (userId: string): Promise
         }
       } else {
         // Handle group messages
-        const { rows: messages } = await pool.query(
-          'SELECT id, delivered_to FROM group_messages WHERE group_chat_id = $1 AND sender_id != $2',
-          [chat.chat_id, userId]
-        );
+        const messages = await prisma.groupMessage.findMany({
+          where: {
+            group_chat_id: chat.chat_id,
+            sender_id: { not: userId }
+          },
+          select: { id: true, deliveredTo: true }
+        });
 
         for (const message of messages) {
-          let delivered = message.delivered_to ? message.delivered_to : [];
+          let delivered = message.deliveredTo ? message.deliveredTo as string[] : [];
 
           // Check if user is not already in delivered_to
           if (!delivered.includes(userId)) {
             delivered.push(userId);
 
             // Update delivered_to array
-            await pool.query(
-              'UPDATE group_messages SET delivered_to = $1 WHERE id = $2',
-              [delivered, message.id]
-            );
+            await prisma.groupMessage.update({
+              where: { id: message.id },
+              data: { deliveredTo: delivered }
+            });
 
             // Emit delivery event to notify other users
             globalIo.to(chat.chat_id).emit('message:delivered', {
@@ -505,8 +495,6 @@ export const markAllMessagesAsDeliveredForUser = async (userId: string): Promise
               messageId: message.id,
               delivered: userId
             });
-          } else {
-            console.log('Message already delivered to user:', message.id, userId);
           }
         }
       }

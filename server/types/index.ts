@@ -1,17 +1,18 @@
+import { User } from '@prisma/client';
 import { Request } from 'express';
 import { Socket } from 'socket.io';
 
 // User types
-export interface User {
-  id: string;
-  name: string;
-  email: string;
-  password: string;
-  avatar?: string;
-  status?: string;
-  created_at: Date;
-  updated_at: Date;
-}
+// export interface User {
+//   id: string;
+//   name: string;
+//   email: string;
+//   password: string;
+//   avatar?: string;
+//   status?: string;
+//   created_at: Date;
+//   updated_at: Date;
+// }
 
 export interface UserWithoutPassword extends Omit<User, 'password'> { }
 

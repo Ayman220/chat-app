@@ -80,25 +80,17 @@ const messageSlice = createSlice({
     },
     updateMessage: (state, action: PayloadAction<{ chatId: string; messageId: string; updates: Partial<Message> }>) => {
       const { chatId, messageId, updates } = action.payload;
-      console.log('🔄 REDUX updateMessage called:', { chatId, messageId, updates });
 
       if (state.messages[chatId]) {
         const messageIndex = state.messages[chatId].findIndex(msg => msg.id === messageId);
-        console.log('🔄 Message found at index:', messageIndex);
 
         if (messageIndex !== -1) {
           const oldMessage = state.messages[chatId][messageIndex];
-          console.log('🔄 Old message state:', { read: oldMessage.read, delivered: oldMessage.delivered });
 
           state.messages[chatId][messageIndex] = { ...state.messages[chatId][messageIndex], ...updates };
 
           const newMessage = state.messages[chatId][messageIndex];
-          console.log('🔄 New message state:', { read: newMessage.read, delivered: newMessage.delivered });
-        } else {
-          console.log('🔄 Message not found in state');
         }
-      } else {
-        console.log('🔄 Chat not found in state');
       }
     },
     setMessageDelivered: (state, action: PayloadAction<{ chatId: string; messageId: string; userId: string }>) => {
@@ -188,12 +180,6 @@ const messageSlice = createSlice({
       .addCase(sendMessage.rejected, (state, action) => {
         state.sending = false;
         state.error = action.payload as string;
-      })
-      // Mark Messages as Read - Don't automatically mark all messages as read
-      // The server will emit message:read events for messages that were actually marked as read
-      .addCase(markAllMessagesAsRead.fulfilled, (state, action) => {
-        // No automatic state update - let socket events handle read status updates
-        console.log('📖 markAllMessagesAsRead completed for chat:', action.payload);
       });
   },
 });

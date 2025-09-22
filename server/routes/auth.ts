@@ -2,11 +2,12 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import nodemailer from 'nodemailer';
-import pool from '../database/config';
 import { generateToken } from '../middleware/auth';
-import { User, UserWithoutPassword, ApiResponse } from '../types';
+import { UserWithoutPassword, ApiResponse } from '../types';
+import { PrismaClient } from '../generated/prisma';
 
 const router = Router();
+const prisma = new PrismaClient();
 
 // Email transporter
 const transporter = nodemailer.createTransport({
@@ -40,12 +41,11 @@ router.post('/register', async (req: Request, res: Response): Promise<Response> 
     }
 
     // Check if user already exists
-    const { rows: existingUsers } = await pool.query(
-      'SELECT id FROM users WHERE email = $1',
-      [email]
-    );
+    const existingUser = await prisma.user.findUnique({
+      where: { email }
+    });
 
-    if (existingUsers.length > 0) {
+    if (existingUser) {
       return res.status(400).json({
         success: false,
         error: 'User with this email already exists'
@@ -56,19 +56,23 @@ router.post('/register', async (req: Request, res: Response): Promise<Response> 
     const hashedPassword = await bcrypt.hash(password, 12);
 
     // Create user
-    const userId = uuidv4();
-    await pool.query(
-      'INSERT INTO users (id, name, email, password) VALUES ($1, $2, $3, $4)',
-      [userId, name, email, hashedPassword]
-    );
-
-    // Get created user
-    const { rows: users } = await pool.query(
-      'SELECT id, name, email, avatar, status, created_at, updated_at FROM users WHERE id = $1',
-      [userId]
-    );
-
-    const user = users[0] as UserWithoutPassword;
+    const user = await prisma.user.create({
+      data: {
+        id: uuidv4(),
+        name,
+        email,
+        password: hashedPassword
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        avatar: true,
+        status: true,
+        created_at: true,
+        updated_at: true
+      }
+    });
     const token = generateToken({ userId: user.id, email: user.email });
 
     return res.status(201).json({
@@ -98,12 +102,9 @@ router.post('/login', async (req: Request, res: Response): Promise<Response> => 
     }
 
     // Get user
-    const { rows: users } = await pool.query(
-      'SELECT * FROM users WHERE email = $1',
-      [email]
-    );
-
-    const user = users[0] as User;
+    const user = await prisma.user.findUnique({
+      where: { email }
+    });
 
     if (!user) {
       return res.status(401).json({
@@ -165,12 +166,18 @@ router.get('/me', async (req: Request, res: Response): Promise<Response> => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret') as { userId: string; email: string };
 
     try {
-      const { rows: users } = await pool.query(
-        'SELECT id, name, email, avatar, status, created_at, updated_at FROM users WHERE id = $1',
-        [decoded.userId]
-      );
-
-      const user = users[0] as UserWithoutPassword;
+      const user = await prisma.user.findUnique({
+        where: { id: decoded.userId },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          avatar: true,
+          status: true,
+          created_at: true,
+          updated_at: true
+        }
+      });
 
       if (!user) {
         return res.status(401).json({
@@ -208,12 +215,10 @@ router.post('/forgot-password', async (req: Request, res: Response): Promise<Res
     }
 
     // Check if user exists
-    const { rows: users } = await pool.query(
-      'SELECT id, name FROM users WHERE email = $1',
-      [email]
-    );
-
-    const user = users[0];
+    const user = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true, name: true }
+    });
 
     if (!user) {
       return res.status(404).json({
@@ -227,14 +232,18 @@ router.post('/forgot-password', async (req: Request, res: Response): Promise<Res
     const expiresAt = new Date(Date.now() + 3600000); // 1 hour
 
     // Save reset token
-    await pool.query(
-      'INSERT INTO password_reset_tokens (id, user_id, token, expires_at) VALUES ($1, $2, $3, $4)',
-      [uuidv4(), user.id, resetToken, expiresAt]
-    );
+    await prisma.passwordResetToken.create({
+      data: {
+        id: uuidv4(),
+        user_id: user.id,
+        token: resetToken,
+        expires_at: expiresAt
+      }
+    });
 
     // Send email
     const resetUrl = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}`;
-    
+
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to: email,
@@ -284,12 +293,9 @@ router.post('/reset-password', async (req: Request, res: Response): Promise<Resp
     }
 
     // Check if token exists and is valid
-    const { rows: tokens } = await pool.query(
-      'SELECT user_id, expires_at FROM password_reset_tokens WHERE token = $1',
-      [token]
-    );
-
-    const resetToken = tokens[0];
+    const resetToken = await prisma.passwordResetToken.findUnique({
+      where: { token }
+    });
 
     if (!resetToken) {
       return res.status(400).json({
@@ -298,7 +304,7 @@ router.post('/reset-password', async (req: Request, res: Response): Promise<Resp
       } as ApiResponse);
     }
 
-    if (new Date() > new Date(resetToken.expires_at)) {
+    if (new Date() > resetToken.expires_at) {
       return res.status(400).json({
         success: false,
         error: 'Reset token has expired'
@@ -309,16 +315,15 @@ router.post('/reset-password', async (req: Request, res: Response): Promise<Resp
     const hashedPassword = await bcrypt.hash(password, 12);
 
     // Update password
-    await pool.query(
-      'UPDATE users SET password = $1 WHERE id = $2',
-      [hashedPassword, resetToken.user_id]
-    );
+    await prisma.user.update({
+      where: { id: resetToken.user_id },
+      data: { password: hashedPassword }
+    });
 
     // Delete used token
-    await pool.query(
-      'DELETE FROM password_reset_tokens WHERE token = $1',
-      [token]
-    );
+    await prisma.passwordResetToken.delete({
+      where: { token }
+    });
 
     return res.json({
       success: true,

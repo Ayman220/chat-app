@@ -1,7 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { AuthRequest, JWTPayload, UserWithoutPassword } from '../types';
-import pool from '../database/config';
+import { PrismaClient } from '../generated/prisma';
+
+const prisma = new PrismaClient();
 
 export const authenticateToken = async (
   req: AuthRequest,
@@ -21,16 +23,23 @@ export const authenticateToken = async (
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret') as JWTPayload;
-    
-    // Get user from database
-    const { rows } = await pool.query(
-      'SELECT id, name, email, avatar, status, created_at, updated_at FROM users WHERE id = $1',
-      [decoded.userId]
-    );
 
-    const users = rows as UserWithoutPassword[];
-    
-    if (users.length === 0) {
+    // Get user from database
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        avatar: true,
+        status: true,
+        last_seen: true,
+        created_at: true,
+        updated_at: true
+      }
+    });
+
+    if (!user) {
       res.status(401).json({
         success: false,
         error: 'Invalid token'
@@ -38,7 +47,7 @@ export const authenticateToken = async (
       return;
     }
 
-    req.user = users[0];
+    req.user = user;
     next();
   } catch (error) {
     console.error('Auth middleware error:', error);

@@ -1,17 +1,15 @@
 import { Router, Response } from 'express';
-import pool from '../database/config';
 import { AuthRequest, UserWithoutPassword, ApiResponse } from '../types';
+import { PrismaClient } from '../generated/prisma';
 
 const router = Router();
+const prisma = new PrismaClient();
 
 // Get all users with optional search
 router.get('/', async (req: AuthRequest, res: Response): Promise<Response> => {
   try {
     const { search } = req.query;
     const userId = req.user?.id;
-
-    console.log('🔍 USERS ENDPOINT - Search query:', search);
-    console.log('🔍 USERS ENDPOINT - User ID:', userId);
 
     if (!userId) {
       return res.status(401).json({
@@ -20,36 +18,49 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<Response> => {
       } as ApiResponse);
     }
 
-    let query: string;
-    let params: any[];
+    let users: any[];
 
     if (search && typeof search === 'string' && search.trim().length > 0) {
       // Search users by name or email
-      query = `
-        SELECT id, name, email, avatar, status, created_at, updated_at 
-        FROM users 
-        WHERE id != $1 AND (name ILIKE $2 OR email ILIKE $3)
-        ORDER BY name ASC
-        LIMIT 20
-      `;
-      params = [userId, `%${search.trim()}%`, `%${search.trim()}%`];
-      console.log('🔍 USERS ENDPOINT - Executing search query with params:', params);
+      users = await prisma.user.findMany({
+        where: {
+          id: { not: userId },
+          OR: [
+            { name: { contains: search.trim(), mode: 'insensitive' } },
+            { email: { contains: search.trim(), mode: 'insensitive' } }
+          ]
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          avatar: true,
+          status: true,
+          created_at: true,
+          updated_at: true
+        },
+        orderBy: { name: 'asc' },
+        take: 20
+      });
     } else {
       // Get all users (for backward compatibility)
-      query = `
-        SELECT id, name, email, avatar, status, created_at, updated_at 
-        FROM users 
-        WHERE id != $1
-        ORDER BY name ASC
-        LIMIT 50
-      `;
-      params = [userId];
-      console.log('🔍 USERS ENDPOINT - Executing all users query');
+      users = await prisma.user.findMany({
+        where: {
+          id: { not: userId }
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          avatar: true,
+          status: true,
+          created_at: true,
+          updated_at: true
+        },
+        orderBy: { name: 'asc' },
+        take: 50
+      });
     }
-
-    const { rows: users } = await pool.query(query, params);
-
-    console.log('🔍 USERS ENDPOINT - Found users:', users.length);
 
     return res.json({
       success: true,
@@ -69,12 +80,18 @@ router.get('/:id', async (req: AuthRequest, res: Response): Promise<Response> =>
   try {
     const { id } = req.params;
 
-    const { rows: users } = await pool.query(
-      'SELECT id, name, email, avatar, status, created_at, updated_at FROM users WHERE id = $1',
-      [id]
-    );
-
-    const user = users[0] as UserWithoutPassword;
+    const user = await prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        avatar: true,
+        status: true,
+        created_at: true,
+        updated_at: true
+      }
+    });
 
     if (!user) {
       return res.status(404).json({
@@ -109,45 +126,42 @@ router.put('/profile', async (req: AuthRequest, res: Response) => {
       } as ApiResponse);
     }
 
-    const updateFields: string[] = [];
-    const updateValues: any[] = [];
+    // Build update data object
+    const updateData: any = {};
 
     if (name) {
-      updateFields.push('name = $' + (updateValues.length + 1));
-      updateValues.push(name);
+      updateData.name = name;
     }
 
     if (avatar) {
-      updateFields.push('avatar = $' + (updateValues.length + 1));
-      updateValues.push(avatar);
+      updateData.avatar = avatar;
     }
 
     if (status) {
-      updateFields.push('status = $' + (updateValues.length + 1));
-      updateValues.push(status);
+      updateData.status = status;
     }
 
-    if (updateFields.length === 0) {
+    if (Object.keys(updateData).length === 0) {
       return res.status(400).json({
         success: false,
         error: 'No fields to update'
       } as ApiResponse);
     }
 
-    updateValues.push(userId);
-
-    await pool.query(
-      `UPDATE users SET ${updateFields.join(', ')} WHERE id = $${updateValues.length}`,
-      updateValues
-    );
-
-    // Get updated user
-    const { rows: users } = await pool.query(
-      'SELECT id, name, email, avatar, status, created_at, updated_at FROM users WHERE id = $1',
-      [userId]
-    );
-
-    const updatedUser = users[0] as UserWithoutPassword;
+    // Update user
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: updateData,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        avatar: true,
+        status: true,
+        created_at: true,
+        updated_at: true
+      }
+    });
 
     return res.json({
       success: true,
@@ -183,15 +197,19 @@ router.post('/last-seen', async (req: AuthRequest, res: Response): Promise<Respo
     }
 
     // Get last seen data for the requested users
-    const placeholders = userIds.map((_, index) => `$${index + 1}`).join(',');
-    const { rows } = await pool.query(
-      `SELECT id, last_seen FROM users WHERE id IN (${placeholders})`,
-      userIds
-    );
+    const users = await prisma.user.findMany({
+      where: {
+        id: { in: userIds }
+      },
+      select: {
+        id: true,
+        last_seen: true
+      }
+    });
 
     // Convert to object format for easy lookup
-    const lastSeenData = rows.reduce((acc: any, row: any) => {
-      acc[row.id] = row.last_seen;
+    const lastSeenData = users.reduce((acc: any, user: any) => {
+      acc[user.id] = user.last_seen;
       return acc;
     }, {});
 

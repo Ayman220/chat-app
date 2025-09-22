@@ -1,9 +1,10 @@
 import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import pool from '../database/config';
 import { AuthRequest, Message, MessageWithSender, ApiResponse, PaginatedResponse } from '../types';
+import { PrismaClient } from '../generated/prisma';
 
 const router = Router();
+const prisma = new PrismaClient();
 
 // Get messages for a chat
 router.get('/:chatId', async (req: AuthRequest, res: Response): Promise<Response> => {
@@ -19,13 +20,35 @@ router.get('/:chatId', async (req: AuthRequest, res: Response): Promise<Response
       } as ApiResponse);
     }
 
-    // Check if user is participant
-    const { rows: participants } = await pool.query(
-      'SELECT * FROM chat_participants WHERE chat_id = $1 AND user_id = $2',
-      [chatId, userId]
-    );
+    // Check if user is participant (try both direct and group chats)
+    const [directChat, groupChat] = await Promise.all([
+      prisma.directChat.findUnique({
+        where: { id: chatId },
+        select: { sender_id: true, recipient_id: true }
+      }),
+      prisma.groupChat.findUnique({
+        where: { id: chatId },
+        include: {
+          participants: {
+            where: { user_id: userId },
+            select: { role: true }
+          }
+        }
+      })
+    ]);
 
-    if (participants.length === 0) {
+    let isParticipant = false;
+    let chatType = '';
+
+    if (directChat) {
+      isParticipant = directChat.sender_id === userId || directChat.recipient_id === userId;
+      chatType = 'direct';
+    } else if (groupChat) {
+      isParticipant = groupChat.participants.length > 0;
+      chatType = 'group';
+    }
+
+    if (!isParticipant) {
       return res.status(403).json({
         success: false,
         error: 'Access denied'
@@ -34,55 +57,84 @@ router.get('/:chatId', async (req: AuthRequest, res: Response): Promise<Response
 
     const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
 
-    // Get total count
-    const { rows: countResult } = await pool.query(
-      'SELECT COUNT(*) as total FROM messages WHERE chat_id = $1',
-      [chatId]
-    );
+    let total: number;
+    let messages: any[];
 
-    const total = parseInt(countResult[0].total);
-
-    // Get messages with sender info
-    const { rows: messages } = await pool.query(`
-      SELECT 
-        m.id,
-        m.content,
-        m.sender_id,
-        m.direct_chat_id as chat_id,
-        m.read,
-        m.delivered,
-        m.created_at,
-        m.updated_at,
-        u.id as sender_id,
-        u.name as sender_name,
-        u.email as sender_email,
-        u.avatar as sender_avatar,
-        u.status as sender_status
-      FROM messages m
-      INNER JOIN users u ON m.sender_id = u.id
-      WHERE m.chat_id = $1
-      ORDER BY m.created_at DESC
-      LIMIT $2 OFFSET $3
-    `, [chatId, parseInt(limit as string), offset]);
+    if (chatType === 'direct') {
+      // Get direct messages
+      [total, messages] = await Promise.all([
+        prisma.directMessage.count({
+          where: { direct_chat_id: chatId }
+        }),
+        prisma.directMessage.findMany({
+          where: { direct_chat_id: chatId },
+          include: {
+            sender: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+                status: true,
+                last_seen: true,
+                created_at: true,
+                updated_at: true
+              }
+            }
+          },
+          orderBy: { created_at: 'desc' },
+          skip: offset,
+          take: parseInt(limit as string)
+        })
+      ]);
+    } else {
+      // Get group messages
+      [total, messages] = await Promise.all([
+        prisma.groupMessage.count({
+          where: { group_chat_id: chatId }
+        }),
+        prisma.groupMessage.findMany({
+          where: { group_chat_id: chatId },
+          include: {
+            sender: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+                status: true,
+                last_seen: true,
+                created_at: true,
+                updated_at: true
+              }
+            }
+          },
+          orderBy: { created_at: 'desc' },
+          skip: offset,
+          take: parseInt(limit as string)
+        })
+      ]);
+    }
 
     // Format messages
-    const formattedMessages = messages.map(msg => ({
+    const formattedMessages = messages.map((msg: any) => ({
       id: msg.id,
       content: msg.content,
       sender_id: msg.sender_id,
-      chat_id: msg.chat_id,
-      read: Boolean(msg.read),
-      delivered: msg.delivered ?? false,
+      chat_id: chatType === 'direct' ? msg.direct_chat_id : msg.group_chat_id,
+      read: chatType === 'direct' ? Boolean(msg.read) : false, // Group messages don't have individual read status
+      delivered: chatType === 'direct' ? Boolean(msg.delivered) : false, // Group messages don't have individual delivered status
       created_at: msg.created_at,
       updated_at: msg.updated_at,
       sender: {
-        id: msg.sender_id,
-        name: msg.sender_name,
-        email: msg.sender_email,
-        avatar: msg.sender_avatar,
-        status: msg.sender_status,
-        created_at: msg.created_at,
-        updated_at: msg.updated_at
+        id: msg.sender.id,
+        name: msg.sender.name,
+        email: msg.sender.email,
+        avatar: msg.sender.avatar,
+        status: msg.sender.status,
+        last_seen: msg.sender.last_seen,
+        created_at: msg.sender.created_at,
+        updated_at: msg.sender.updated_at
       }
     }));
 
@@ -131,13 +183,35 @@ router.post('/:chatId', async (req: AuthRequest, res: Response) => {
       } as ApiResponse);
     }
 
-    // Check if user is participant
-    const { rows: participants } = await pool.query(
-      'SELECT * FROM chat_participants WHERE chat_id = $1 AND user_id = $2',
-      [chatId, userId]
-    );
+    // Check if user is participant (try both direct and group chats)
+    const [directChat, groupChat] = await Promise.all([
+      prisma.directChat.findUnique({
+        where: { id: chatId },
+        select: { sender_id: true, recipient_id: true }
+      }),
+      prisma.groupChat.findUnique({
+        where: { id: chatId },
+        include: {
+          participants: {
+            where: { user_id: userId },
+            select: { role: true }
+          }
+        }
+      })
+    ]);
 
-    if (participants.length === 0) {
+    let isParticipant = false;
+    let chatType = '';
+
+    if (directChat) {
+      isParticipant = directChat.sender_id === userId || directChat.recipient_id === userId;
+      chatType = 'direct';
+    } else if (groupChat) {
+      isParticipant = groupChat.participants.length > 0;
+      chatType = 'group';
+    }
+
+    if (!isParticipant) {
       return res.status(403).json({
         success: false,
         error: 'Access denied'
@@ -146,58 +220,87 @@ router.post('/:chatId', async (req: AuthRequest, res: Response) => {
 
     // Create message
     const messageId = uuidv4();
-    await pool.query(
-      'INSERT INTO messages (id, content, sender_id, chat_id) VALUES ($1, $2, $3, $4)',
-      [messageId, content.trim(), userId, chatId]
-    );
+    let newMessage: any;
 
-    // Update chat's updated_at timestamp
-    await pool.query(
-      'UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-      [chatId]
-    );
+    if (chatType === 'direct') {
+      newMessage = await prisma.directMessage.create({
+        data: {
+          id: messageId,
+          content: content.trim(),
+          sender_id: userId,
+          direct_chat_id: chatId,
+          delivered: false
+        },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatar: true,
+              status: true,
+              last_seen: true,
+              created_at: true,
+              updated_at: true
+            }
+          }
+        }
+      });
 
-    // Get created message with sender info
-    const { rows: messages } = await pool.query(`
-      SELECT 
-        m.id,
-        m.content,
-        m.sender_id,
-        m.chat_id,
-        m.read,
-        m.read_by_recipient,
-        m.delivered,
-        m.created_at,
-        m.updated_at,
-        u.id as sender_id,
-        u.name as sender_name,
-        u.email as sender_email,
-        u.avatar as sender_avatar,
-        u.status as sender_status
-      FROM messages m
-      INNER JOIN users u ON m.sender_id = u.id
-      WHERE m.id = $1
-    `, [messageId]);
+      // Update direct chat's updated_at timestamp
+      await prisma.directChat.update({
+        where: { id: chatId },
+        data: { updated_at: new Date() }
+      });
+    } else {
+      newMessage = await prisma.groupMessage.create({
+        data: {
+          id: messageId,
+          content: content.trim(),
+          sender_id: userId,
+          group_chat_id: chatId
+        },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatar: true,
+              status: true,
+              last_seen: true,
+              created_at: true,
+              updated_at: true
+            }
+          }
+        }
+      });
 
-    const message = messages[0];
+      // Update group chat's updated_at timestamp
+      await prisma.groupChat.update({
+        where: { id: chatId },
+        data: { updated_at: new Date() }
+      });
+    }
 
     const formattedMessage: MessageWithSender = {
-      id: message.id,
-      content: message.content,
-      sender_id: message.sender_id,
-      chat_id: message.chat_id,
-      read: Boolean(message.read),
-      delivered: Boolean(message.delivered),
-      created_at: message.created_at,
-      updated_at: message.updated_at,
+      id: newMessage.id,
+      content: newMessage.content,
+      sender_id: newMessage.sender_id,
+      chat_id: chatType === 'direct' ? newMessage.direct_chat_id : newMessage.group_chat_id,
+      read: chatType === 'direct' ? Boolean(newMessage.read) : false,
+      delivered: chatType === 'direct' ? Boolean(newMessage.delivered) : false,
+      created_at: newMessage.created_at,
+      updated_at: newMessage.updated_at,
       sender: {
-        id: message.sender_id,
-        name: message.sender_name,
-        email: message.sender_email,
-        avatar: message.sender_avatar,
-        status: message.sender_status,
-        created_at: message.created_at,
-        updated_at: message.updated_at
+        id: newMessage.sender.id,
+        name: newMessage.sender.name,
+        email: newMessage.sender.email,
+        avatar: newMessage.sender.avatar,
+        status: newMessage.sender.status,
+        last_seen: newMessage.sender.last_seen,
+        created_at: newMessage.sender.created_at,
+        updated_at: newMessage.sender.updated_at
       }
     };
 
@@ -227,13 +330,35 @@ router.put('/:chatId/read', async (req: AuthRequest, res: Response) => {
       } as ApiResponse);
     }
 
-    // Check if user is participant
-    const { rows: participants } = await pool.query(
-      'SELECT * FROM chat_participants WHERE chat_id = $1 AND user_id = $2',
-      [chatId, userId]
-    );
+    // Check if user is participant (try both direct and group chats)
+    const [directChat, groupChat] = await Promise.all([
+      prisma.directChat.findUnique({
+        where: { id: chatId },
+        select: { sender_id: true, recipient_id: true }
+      }),
+      prisma.groupChat.findUnique({
+        where: { id: chatId },
+        include: {
+          participants: {
+            where: { user_id: userId },
+            select: { role: true }
+          }
+        }
+      })
+    ]);
 
-    if (participants.length === 0) {
+    let isParticipant = false;
+    let chatType = '';
+
+    if (directChat) {
+      isParticipant = directChat.sender_id === userId || directChat.recipient_id === userId;
+      chatType = 'direct';
+    } else if (groupChat) {
+      isParticipant = groupChat.participants.length > 0;
+      chatType = 'group';
+    }
+
+    if (!isParticipant) {
       return res.status(403).json({
         success: false,
         error: 'Access denied'
@@ -241,10 +366,35 @@ router.put('/:chatId/read', async (req: AuthRequest, res: Response) => {
     }
 
     // Mark all unread messages as read
-    await pool.query(
-      'UPDATE messages SET read = true WHERE chat_id = $1 AND sender_id != $2 AND read = false',
-      [chatId, userId]
-    );
+    if (chatType === 'direct') {
+      await prisma.directMessage.updateMany({
+        where: {
+          direct_chat_id: chatId,
+          sender_id: { not: userId },
+          read: false
+        },
+        data: { read: true }
+      });
+    } else {
+      // For group messages, add user to readBy array
+      await prisma.groupMessage.updateMany({
+        where: {
+          group_chat_id: chatId,
+          sender_id: { not: userId },
+          readBy: {
+            not: {
+              path: '$',
+              array_contains: userId
+            }
+          }
+        },
+        data: {
+          readBy: {
+            push: userId
+          }
+        }
+      });
+    }
 
     return res.json({
       success: true,
@@ -272,26 +422,61 @@ router.delete('/:chatId/:messageId', async (req: AuthRequest, res: Response) => 
       } as ApiResponse);
     }
 
-    // Check if user is participant
-    const { rows: participants } = await pool.query(
-      'SELECT * FROM chat_participants WHERE chat_id = $1 AND user_id = $2',
-      [chatId, userId]
-    );
+    // Check if user is participant (try both direct and group chats)
+    const [directChat, groupChat] = await Promise.all([
+      prisma.directChat.findUnique({
+        where: { id: chatId },
+        select: { sender_id: true, recipient_id: true }
+      }),
+      prisma.groupChat.findUnique({
+        where: { id: chatId },
+        include: {
+          participants: {
+            where: { user_id: userId },
+            select: { role: true }
+          }
+        }
+      })
+    ]);
 
-    if (participants.length === 0) {
+    let isParticipant = false;
+    let chatType = '';
+
+    if (directChat) {
+      isParticipant = directChat.sender_id === userId || directChat.recipient_id === userId;
+      chatType = 'direct';
+    } else if (groupChat) {
+      isParticipant = groupChat.participants.length > 0;
+      chatType = 'group';
+    }
+
+    if (!isParticipant) {
       return res.status(403).json({
         success: false,
         error: 'Access denied'
       } as ApiResponse);
     }
 
-    // Check if user is the sender
-    const { rows: messages } = await pool.query(
-      'SELECT sender_id FROM messages WHERE id = $1 AND chat_id = $2',
-      [messageId, chatId]
-    );
+    // Check if user is the sender and message exists
+    let message: any;
 
-    const message = messages[0];
+    if (chatType === 'direct') {
+      message = await prisma.directMessage.findFirst({
+        where: {
+          id: messageId,
+          direct_chat_id: chatId
+        },
+        select: { sender_id: true }
+      });
+    } else {
+      message = await prisma.groupMessage.findFirst({
+        where: {
+          id: messageId,
+          group_chat_id: chatId
+        },
+        select: { sender_id: true }
+      });
+    }
 
     if (!message) {
       return res.status(404).json({
@@ -308,10 +493,15 @@ router.delete('/:chatId/:messageId', async (req: AuthRequest, res: Response) => 
     }
 
     // Delete message
-    await pool.query(
-      'DELETE FROM messages WHERE id = $1',
-      [messageId]
-    );
+    if (chatType === 'direct') {
+      await prisma.directMessage.delete({
+        where: { id: messageId }
+      });
+    } else {
+      await prisma.groupMessage.delete({
+        where: { id: messageId }
+      });
+    }
 
     return res.json({
       success: true,

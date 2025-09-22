@@ -12,12 +12,10 @@ class SocketService {
   connect(token: string): Socket {
 
     if (this.socket) {
-      console.log('SocketService: Disconnecting existing socket');
       this.socket.disconnect();
       this.socket = null;
     }
 
-    console.log('SocketService: Creating new socket connection to:', this.baseURL);
     this.socket = io(this.baseURL, {
       auth: {
         token,
@@ -29,14 +27,6 @@ class SocketService {
 
     this.socket.on('connect_error', (error) => {
       console.error('SocketService: Connection error:', error);
-    });
-
-    this.socket.on('connect', () => {
-      console.log('SocketService: Connected successfully');
-    });
-
-    this.socket.on('disconnect', (reason) => {
-      console.log('SocketService: Disconnected:', reason);
     });
 
     this.socket.on('error', (error) => {

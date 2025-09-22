@@ -108,23 +108,6 @@ const ChatWindow: React.FC = () => {
     }
   }, [currentChat]);
 
-  // Monitor specific message updates for debugging
-  useEffect(() => {
-    const updatedMessages = chatMessages.filter(msg => msg.read === true);
-    if (updatedMessages.length > 0) {
-      console.log('📊 ChatWindow: Found read messages:', updatedMessages.map(msg => ({ id: msg.id, read: msg.read, delivered: msg.delivered })));
-    }
-  }, [chatMessages]);
-
-  // Monitor chatMessages changes for debugging
-  useEffect(() => {
-
-    console.log('📊 ChatWindow: chatMessages updated:', {
-      chatId: currentChat?.id,
-      messageCount: chatMessages.length,
-      messages: chatMessages.map(msg => ({ id: msg.id, read: msg.read, delivered: msg.delivered }))
-    });
-  }, [chatMessages, currentChat?.id]);
 
   // Scroll to bottom when messages change, unless loading more
   useEffect(() => {
@@ -194,41 +177,20 @@ const ChatWindow: React.FC = () => {
     if (!socket || !currentChat) return;
     const handler = (data: any) => {
       try {
-        console.log('📖 CLIENT RECEIVED READ EVENT:', data);
-        console.log('📖 Current chat ID:', currentChat.id);
-        console.log('📖 Event chat ID:', data.chatId);
-        console.log('📖 Chat messages before update:', chatMessages.length);
-        console.log('📖 Available message IDs in state:', chatMessages.map(msg => msg.id));
-        console.log('📖 Current user ID:', user?.id);
-        console.log('📖 Event user ID:', data.userId);
-
         if (data.chatId === currentChat.id) {
-          console.log('📖 MATCHING CHAT - Updating message:', data.messageId);
-
           // Check if the message exists in the current state
           const messageExists = chatMessages.some(msg => msg.id === data.messageId);
-          console.log('📖 Message exists in state:', messageExists);
-
           if (messageExists) {
             // Only update if this is a message sent by the current user (for read receipts)
             const messageToUpdate = chatMessages.find(msg => msg.id === data.messageId);
             if (messageToUpdate && messageToUpdate.sender_id === user?.id) {
-              console.log('📖 UPDATING OWN MESSAGE - Dispatching updateMessage');
               dispatch(updateMessage({
                 chatId: data.chatId,
                 messageId: data.messageId,
                 updates: { read: true }
               }));
-            } else {
-              console.log('📖 NOT UPDATING - Message not sent by current user or not found');
             }
-
-            console.log('📖 Update dispatched - checking state in next render');
-          } else {
-            console.log('📖 WARNING: Message not found in current state');
           }
-        } else {
-          console.log('📖 CHAT ID MISMATCH - Not updating');
         }
       } catch (error) {
         console.error('Error handling message:read event:', error);

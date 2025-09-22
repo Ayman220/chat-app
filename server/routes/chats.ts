@@ -1,16 +1,15 @@
 import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import pool from '../database/config';
-import { AuthRequest, Chat, ChatWithParticipants, UserWithoutPassword, ApiResponse, PaginatedResponse } from '../types';
+import { AuthRequest, UserWithoutPassword, ApiResponse } from '../types';
+import { PrismaClient } from '../generated/prisma';
 
 const router = Router();
+const prisma = new PrismaClient();
 
 // Get all chats for current user
 router.get('/', async (req: AuthRequest, res: Response): Promise<Response> => {
   try {
     const userId = req.user?.id;
-
-    console.log('📋 GET CHATS - User ID:', userId);
 
     if (!userId) {
       return res.status(401).json({
@@ -20,78 +19,88 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<Response> => {
     }
 
     // Get direct chats (private)
-    const { rows: directChats } = await pool.query(`
-      SELECT 
-        dc.id,
-        dc.created_at,
-        dc.updated_at,
-        'private' as type,
-        NULL as name,
-        (
-          SELECT COUNT(*)
-          FROM direct_messages dm
-          WHERE dm.direct_chat_id = dc.id
-        ) as message_count,
-        (
-          SELECT COUNT(*)
-          FROM direct_messages dm
-          WHERE dm.direct_chat_id = dc.id AND dm.read = false AND dm.sender_id != $1
-        ) as unread_count,
-        (
-          SELECT dm.content
-          FROM direct_messages dm
-          WHERE dm.direct_chat_id = dc.id
-          ORDER BY dm.created_at DESC
-          LIMIT 1
-        ) as last_message_content,
-        (
-          SELECT dm.created_at
-          FROM direct_messages dm
-          WHERE dm.direct_chat_id = dc.id
-          ORDER BY dm.created_at DESC
-          LIMIT 1
-        ) as last_message_time
-      FROM direct_chats dc
-      WHERE dc.user1_id = $1 OR dc.user2_id = $1
-      ORDER BY last_message_time DESC, dc.updated_at DESC
-    `, [userId]);
+    const directChats = await prisma.directChat.findMany({
+      where: {
+        OR: [
+          { sender_id: userId },
+          { recipient_id: userId }
+        ]
+      },
+      include: {
+        messages: {
+          orderBy: { created_at: 'desc' },
+          take: 1,
+          select: {
+            content: true,
+            created_at: true,
+            read: true,
+            sender_id: true
+          }
+        },
+        _count: {
+          select: {
+            messages: true
+          }
+        }
+      },
+      orderBy: { updated_at: 'desc' }
+    });
 
     // Get group chats
-    const { rows: groupChats } = await pool.query(`
-      SELECT 
-        gc.id,
-        gc.name,
-        gc.created_at,
-        gc.updated_at,
-        'group' as type,
-        (
-          SELECT COUNT(*)
-          FROM group_messages gm
-          WHERE gm.group_chat_id = gc.id
-        ) as message_count,
-        0 as unread_count,
-        (
-          SELECT gm.content
-          FROM group_messages gm
-          WHERE gm.group_chat_id = gc.id
-          ORDER BY gm.created_at DESC
-          LIMIT 1
-        ) as last_message_content,
-        (
-          SELECT gm.created_at
-          FROM group_messages gm
-          WHERE gm.group_chat_id = gc.id
-          ORDER BY gm.created_at DESC
-          LIMIT 1
-        ) as last_message_time
-      FROM group_chats gc
-      INNER JOIN group_chat_participants gcp ON gc.id = gcp.group_chat_id
-      WHERE gcp.user_id = $1
-      ORDER BY last_message_time DESC, gc.updated_at DESC
-    `, [userId]);
+    const groupChats = await prisma.groupChat.findMany({
+      where: {
+        participants: {
+          some: {
+            user_id: userId
+          }
+        }
+      },
+      include: {
+        messages: {
+          orderBy: { created_at: 'desc' },
+          take: 1,
+          select: {
+            content: true,
+            created_at: true
+          }
+        },
+        _count: {
+          select: {
+            messages: true
+          }
+        }
+      },
+      orderBy: { updated_at: 'desc' }
+    });
+
+    // Transform direct chats to match expected format
+    const transformedDirectChats = directChats.map(chat => ({
+      id: chat.id,
+      created_at: chat.created_at,
+      updated_at: chat.updated_at,
+      type: 'private',
+      name: null,
+      message_count: chat._count.messages,
+      unread_count: 0, // Will be calculated separately
+      last_message_content: chat.messages[0]?.content || null,
+      last_message_time: chat.messages[0]?.created_at || null
+    }));
+
+    // Transform group chats to match expected format
+    const transformedGroupChats = groupChats.map(chat => ({
+      id: chat.id,
+      name: chat.name,
+      created_at: chat.created_at,
+      updated_at: chat.updated_at,
+      type: 'group',
+      message_count: chat._count.messages,
+      unread_count: 0,
+      last_message_content: chat.messages[0]?.content || null,
+      last_message_time: chat.messages[0]?.created_at || null
+    }));
 
     // Combine and sort all chats
-    const allChats = [...directChats, ...groupChats].sort((a, b) => {
+    const allChats = [...transformedDirectChats, ...transformedGroupChats].sort((a, b) => {
       const aTime = a.last_message_time || a.updated_at;
       const bTime = b.last_message_time || b.updated_at;
       return new Date(bTime).getTime() - new Date(aTime).getTime();
@@ -102,19 +111,34 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<Response> => {
       allChats.map(async (chat: any) => {
         if (chat.type === 'private') {
           // Get the other user in the direct chat
-          const { rows: otherUser } = await pool.query(`
-            SELECT u.id, u.name, u.email, u.avatar, u.status
-            FROM users u
-            INNER JOIN direct_chats dc ON (
-              CASE 
-                WHEN dc.user1_id = $1 THEN u.id = dc.user2_id
-                ELSE u.id = dc.user1_id
-              END
-            )
-            WHERE dc.id = $2
-          `, [userId, chat.id]);
+          const directChat = await prisma.directChat.findUnique({
+            where: { id: chat.id },
+            include: {
+              sender: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                  avatar: true,
+                  status: true
+                }
+              },
+              recipient: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                  avatar: true,
+                  status: true
+                }
+              }
+            }
+          });
 
-          const otherParticipant = otherUser[0] as UserWithoutPassword;
+          const otherParticipant = directChat?.sender_id === userId
+            ? directChat.recipient
+            : directChat?.sender;
+
           return {
             ...chat,
             other_participant: otherParticipant,
@@ -154,9 +178,6 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const userId = req.user?.id;
 
-    console.log('📋 GET CHAT BY ID - Chat ID:', id);
-    console.log('📋 GET CHAT BY ID - User ID:', userId);
-
     if (!userId) {
       return res.status(401).json({
         success: false,
@@ -165,28 +186,42 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
     }
 
     // First, try to find as direct chat
-    const { rows: directChats } = await pool.query(
-      'SELECT * FROM direct_chats WHERE id = $1',
-      [id]
-    );
+    const directChat = await prisma.directChat.findUnique({
+      where: { id },
+      include: {
+        sender: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatar: true,
+            status: true
+          }
+        },
+        recipient: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatar: true,
+            status: true
+          }
+        }
+      }
+    });
 
-    if (directChats.length > 0) {
-      const directChat = directChats[0];
-
+    if (directChat) {
       // Check if user is participant
-      if (directChat.user1_id !== userId && directChat.user2_id !== userId) {
+      if (directChat.sender_id !== userId && directChat.recipient_id !== userId) {
         return res.status(403).json({
           success: false,
           error: 'Access denied'
         } as ApiResponse);
       }
 
-      // Get the other participant
-      const otherUserId = directChat.user1_id === userId ? directChat.user2_id : directChat.user1_id;
-      const { rows: otherUser } = await pool.query(
-        'SELECT id, name, email, avatar, status FROM users WHERE id = $1',
-        [otherUserId]
-      );
+      const otherParticipant = directChat.sender_id === userId
+        ? directChat.recipient
+        : directChat.sender;
 
       const chatWithParticipants = {
         id: directChat.id,
@@ -199,11 +234,11 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
             role: 'member'
           },
           {
-            id: otherUserId,
+            id: otherParticipant.id,
             role: 'member'
           }
         ],
-        other_participant: otherUser[0]
+        other_participant: otherParticipant
       };
 
       return res.json({
@@ -213,42 +248,52 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
     }
 
     // If not found as direct chat, try as group chat
-    const { rows: groupChats } = await pool.query(
-      'SELECT * FROM group_chats WHERE id = $1',
-      [id]
-    );
+    const groupChat = await prisma.groupChat.findUnique({
+      where: { id },
+      include: {
+        participants: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+                status: true
+              }
+            }
+          }
+        }
+      }
+    });
 
-    if (groupChats.length > 0) {
-      const groupChat = groupChats[0];
-
+    if (groupChat) {
       // Check if user is participant
-      const { rows: participants } = await pool.query(
-        'SELECT * FROM group_chat_participants WHERE group_chat_id = $1 AND user_id = $2',
-        [id, userId]
-      );
+      const userParticipant = groupChat.participants.find(p => p.user_id === userId);
 
-      if (participants.length === 0) {
+      if (!userParticipant) {
         return res.status(403).json({
           success: false,
           error: 'Access denied'
         } as ApiResponse);
       }
 
-      // Get all participants
-      const { rows: chatParticipants } = await pool.query(`
-        SELECT u.id, u.name, u.email, u.avatar, u.status, gcp.role
-        FROM users u
-        INNER JOIN group_chat_participants gcp ON u.id = gcp.user_id
-        WHERE gcp.group_chat_id = $1
-      `, [id]);
-
       const chatWithParticipants = {
         id: groupChat.id,
         name: groupChat.name,
+        description: groupChat.description,
+        avatar: groupChat.avatar,
         type: 'group',
         created_at: groupChat.created_at,
         updated_at: groupChat.updated_at,
-        participants: chatParticipants
+        participants: groupChat.participants.map(p => ({
+          id: p.user.id,
+          name: p.user.name,
+          email: p.user.email,
+          avatar: p.user.avatar,
+          status: p.user.status,
+          role: p.role
+        }))
       };
 
       return res.json({
@@ -314,69 +359,76 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       const otherUserId = participants[0];
 
       // Check if direct chat already exists
-      const { rows: existingDirectChats } = await pool.query(`
-        SELECT id FROM direct_chats 
-        WHERE (user1_id = $1 AND user2_id = $2) 
-        OR (user1_id = $2 AND user2_id = $1)
-      `, [userId, otherUserId]);
+      const existingDirectChat = await prisma.directChat.findFirst({
+        where: {
+          OR: [
+            { sender_id: userId, recipient_id: otherUserId },
+            { sender_id: otherUserId, recipient_id: userId }
+          ]
+        },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatar: true,
+              status: true
+            }
+          },
+          recipient: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatar: true,
+              status: true
+            }
+          },
+          messages: {
+            orderBy: { created_at: 'desc' },
+            take: 1,
+            select: {
+              content: true,
+              created_at: true,
+              read: true,
+              sender_id: true
+            }
+          },
+          _count: {
+            select: {
+              messages: true
+            }
+          }
+        }
+      });
 
-      if (existingDirectChats.length > 0) {
+      if (existingDirectChat) {
         // Return existing chat
-        const existingChatId = existingDirectChats[0].id;
-        const { rows: existingChat } = await pool.query(
-          'SELECT * FROM direct_chats WHERE id = $1',
-          [existingChatId]
-        );
+        const otherParticipant = existingDirectChat.sender_id === userId
+          ? existingDirectChat.recipient
+          : existingDirectChat.sender;
 
-        // Get the other participant for existing private chat
-        const existingOtherUserId = existingChat[0].user1_id === userId ? existingChat[0].user2_id : existingChat[0].user1_id;
-        const { rows: otherUser } = await pool.query(
-          'SELECT id, name, email, avatar, status FROM users WHERE id = $1',
-          [existingOtherUserId]
-        );
-
-        // Get message count and last message for existing chat
-        const { rows: messageStats } = await pool.query(`
-          SELECT 
-            COUNT(*) as message_count,
-            (
-              SELECT COUNT(*)
-              FROM direct_messages dm
-              WHERE dm.direct_chat_id = $1 AND dm.read = false AND dm.sender_id != $2
-            ) as unread_count,
-            (
-              SELECT dm.content
-              FROM direct_messages dm
-              WHERE dm.direct_chat_id = $1
-              ORDER BY dm.created_at DESC
-              LIMIT 1
-            ) as last_message_content,
-            (
-              SELECT dm.created_at
-              FROM direct_messages dm
-              WHERE dm.direct_chat_id = $1
-              ORDER BY dm.created_at DESC
-              LIMIT 1
-            ) as last_message_time
-          FROM direct_messages dm
-          WHERE dm.direct_chat_id = $1
-        `, [existingChat[0].id, userId]);
-
-        const stats = messageStats[0] || { message_count: 0, unread_count: 0, last_message_content: null, last_message_time: null };
+        const stats = {
+          message_count: existingDirectChat._count.messages,
+          unread_count: 0, // Will be calculated separately
+          last_message_content: existingDirectChat.messages[0]?.content || null,
+          last_message_time: existingDirectChat.messages[0]?.created_at || null
+        };
 
         return res.status(200).json({
           success: true,
           data: {
-            id: existingChat[0].id,
+            id: existingDirectChat.id,
             type: 'private',
             name: null,
-            created_at: existingChat[0].created_at,
-            updated_at: existingChat[0].updated_at,
-            message_count: parseInt(stats.message_count) || 0,
-            unread_count: parseInt(stats.unread_count) || 0,
+            created_at: existingDirectChat.created_at,
+            updated_at: existingDirectChat.updated_at,
+            message_count: stats.message_count,
+            unread_count: stats.unread_count,
             last_message_content: stats.last_message_content,
             last_message_time: stats.last_message_time,
-            other_participant: otherUser[0],
+            other_participant: otherParticipant,
             last_message: stats.last_message_content ? {
               content: stats.last_message_content,
               created_at: stats.last_message_time
@@ -387,68 +439,76 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 
       // Create new direct chat
       chatId = uuidv4();
-      await pool.query(
-        'INSERT INTO direct_chats (id, user1_id, user2_id) VALUES ($1, $2, $3)',
-        [chatId, userId, otherUserId]
-      );
+      const newDirectChat = await prisma.directChat.create({
+        data: {
+          id: chatId,
+          sender_id: userId,
+          recipient_id: otherUserId
+        },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatar: true,
+              status: true
+            }
+          },
+          recipient: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatar: true,
+              status: true
+            }
+          }
+        }
+      });
 
-      // Get created direct chat
-      const { rows: directChats } = await pool.query(
-        'SELECT * FROM direct_chats WHERE id = $1',
-        [chatId]
-      );
-
-      // Get the other participant for private chat
-      const newOtherUserId = directChats[0].user1_id === userId ? directChats[0].user2_id : directChats[0].user1_id;
-      const { rows: otherUser } = await pool.query(
-        'SELECT id, name, email, avatar, status FROM users WHERE id = $1',
-        [newOtherUserId]
-      );
+      const otherParticipant = newDirectChat.recipient;
 
       chatData = {
-        id: directChats[0].id,
+        id: newDirectChat.id,
         type: 'private',
         name: null,
-        created_at: directChats[0].created_at,
-        updated_at: directChats[0].updated_at,
+        created_at: newDirectChat.created_at,
+        updated_at: newDirectChat.updated_at,
         message_count: 0,
         unread_count: 0,
         last_message_content: null,
         last_message_time: null,
-        other_participant: otherUser[0],
+        other_participant: otherParticipant,
         last_message: null
       };
 
     } else if (type === 'group') {
       // Create new group chat
       chatId = uuidv4();
-      await pool.query(
-        'INSERT INTO group_chats (id, name, created_by) VALUES ($1, $2, $3)',
-        [chatId, name, userId]
-      );
-
-      // Add participants to group
       const allParticipants = [userId, ...participants];
-      for (const participantId of allParticipants) {
-        const role = participantId === userId ? 'admin' : 'member';
-        await pool.query(
-          'INSERT INTO group_chat_participants (id, group_chat_id, user_id, role) VALUES ($1, $2, $3, $4)',
-          [uuidv4(), chatId, participantId, role]
-        );
-      }
 
-      // Get created group chat
-      const { rows: groupChats } = await pool.query(
-        'SELECT * FROM group_chats WHERE id = $1',
-        [chatId]
-      );
+      const newGroupChat = await prisma.groupChat.create({
+        data: {
+          id: chatId,
+          name,
+          created_by: userId,
+          participants: {
+            create: allParticipants.map(participantId => ({
+              id: uuidv4(),
+              user_id: participantId,
+              role: participantId === userId ? 'admin' : 'member'
+            }))
+          }
+        }
+      });
 
       chatData = {
-        id: groupChats[0].id,
-        name: groupChats[0].name,
+        id: newGroupChat.id,
+        name: newGroupChat.name,
         type: 'group',
-        created_at: groupChats[0].created_at,
-        updated_at: groupChats[0].updated_at,
+        created_at: newGroupChat.created_at,
+        updated_at: newGroupChat.updated_at,
         message_count: 0,
         unread_count: 0,
         last_message_content: null,
@@ -461,8 +521,6 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         error: 'Invalid chat type'
       } as ApiResponse);
     }
-
-    console.log('🔨 CREATE CHAT - Created chat:', chatData);
 
     return res.status(201).json({
       success: true,
@@ -484,9 +542,6 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<Response> =>
     const { name } = req.body;
     const userId = req.user?.id;
 
-    console.log('📝 UPDATE CHAT - Chat ID:', id);
-    console.log('📝 UPDATE CHAT - New name:', name);
-
     if (!userId) {
       return res.status(401).json({
         success: false,
@@ -495,12 +550,11 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<Response> =>
     }
 
     // First, try to find as direct chat
-    const { rows: directChats } = await pool.query(
-      'SELECT * FROM direct_chats WHERE id = $1',
-      [id]
-    );
+    const directChat = await prisma.directChat.findUnique({
+      where: { id }
+    });
 
-    if (directChats.length > 0) {
+    if (directChat) {
       return res.status(400).json({
         success: false,
         error: 'Cannot update direct chats'
@@ -508,19 +562,19 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<Response> =>
     }
 
     // If not found as direct chat, try as group chat
-    const { rows: groupChats } = await pool.query(
-      'SELECT * FROM group_chats WHERE id = $1',
-      [id]
-    );
+    const groupChat = await prisma.groupChat.findUnique({
+      where: { id },
+      include: {
+        participants: {
+          where: { user_id: userId },
+          select: { role: true }
+        }
+      }
+    });
 
-    if (groupChats.length > 0) {
+    if (groupChat) {
       // Check if user is admin
-      const { rows: participants } = await pool.query(
-        'SELECT role FROM group_chat_participants WHERE group_chat_id = $1 AND user_id = $2',
-        [id, userId]
-      );
-
-      const participant = participants[0];
+      const participant = groupChat.participants[0];
 
       if (!participant || participant.role !== 'admin') {
         return res.status(403).json({
@@ -530,27 +584,19 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<Response> =>
       }
 
       // Update group chat
-      await pool.query(
-        'UPDATE group_chats SET name = $1 WHERE id = $2',
-        [name, id]
-      );
-
-      // Get updated chat
-      const { rows: updatedChats } = await pool.query(
-        'SELECT * FROM group_chats WHERE id = $1',
-        [id]
-      );
-
-      const chat = updatedChats[0];
+      const updatedGroupChat = await prisma.groupChat.update({
+        where: { id },
+        data: { name }
+      });
 
       return res.json({
         success: true,
         data: {
-          id: chat.id,
-          name: chat.name,
+          id: updatedGroupChat.id,
+          name: updatedGroupChat.name,
           type: 'group',
-          created_at: chat.created_at,
-          updated_at: chat.updated_at
+          created_at: updatedGroupChat.created_at,
+          updated_at: updatedGroupChat.updated_at
         }
       } as ApiResponse<any>);
     }
@@ -573,10 +619,6 @@ router.delete('/:id', async (req: AuthRequest, res: Response): Promise<Response>
   try {
     const { id } = req.params;
     const userId = req.user?.id;
-
-    console.log('🗑️ DELETE CHAT - Chat ID:', id);
-    console.log('🗑️ DELETE CHAT - User ID:', userId);
-
     if (!userId) {
       return res.status(401).json({
         success: false,
@@ -585,16 +627,13 @@ router.delete('/:id', async (req: AuthRequest, res: Response): Promise<Response>
     }
 
     // First, try to find as direct chat
-    const { rows: directChats } = await pool.query(
-      'SELECT * FROM direct_chats WHERE id = $1',
-      [id]
-    );
+    const directChat = await prisma.directChat.findUnique({
+      where: { id }
+    });
 
-    if (directChats.length > 0) {
-      const directChat = directChats[0];
-
+    if (directChat) {
       // Check if user is participant
-      if (directChat.user1_id !== userId && directChat.user2_id !== userId) {
+      if (directChat.sender_id !== userId && directChat.recipient_id !== userId) {
         return res.status(403).json({
           success: false,
           error: 'Access denied'
@@ -602,7 +641,9 @@ router.delete('/:id', async (req: AuthRequest, res: Response): Promise<Response>
       }
 
       // Delete direct chat (cascade will handle related records)
-      await pool.query('DELETE FROM direct_chats WHERE id = $1', [id]);
+      await prisma.directChat.delete({
+        where: { id }
+      });
 
       return res.json({
         success: true,
@@ -611,19 +652,19 @@ router.delete('/:id', async (req: AuthRequest, res: Response): Promise<Response>
     }
 
     // If not found as direct chat, try as group chat
-    const { rows: groupChats } = await pool.query(
-      'SELECT * FROM group_chats WHERE id = $1',
-      [id]
-    );
+    const groupChat = await prisma.groupChat.findUnique({
+      where: { id },
+      include: {
+        participants: {
+          where: { user_id: userId },
+          select: { role: true }
+        }
+      }
+    });
 
-    if (groupChats.length > 0) {
+    if (groupChat) {
       // Check if user is admin
-      const { rows: participants } = await pool.query(
-        'SELECT role FROM group_chat_participants WHERE group_chat_id = $1 AND user_id = $2',
-        [id, userId]
-      );
-
-      const participant = participants[0];
+      const participant = groupChat.participants[0];
 
       if (!participant || participant.role !== 'admin') {
         return res.status(403).json({
@@ -633,7 +674,9 @@ router.delete('/:id', async (req: AuthRequest, res: Response): Promise<Response>
       }
 
       // Delete group chat (cascade will handle related records)
-      await pool.query('DELETE FROM group_chats WHERE id = $1', [id]);
+      await prisma.groupChat.delete({
+        where: { id }
+      });
 
       return res.json({
         success: true,
@@ -661,10 +704,6 @@ router.get('/:id/messages', async (req: AuthRequest, res: Response): Promise<Res
   const userId = req.user?.id;
 
   try {
-    console.log('📨 GET MESSAGES - Chat ID:', chatId);
-    console.log('📨 GET MESSAGES - Page:', page);
-    console.log('📨 GET MESSAGES - Limit:', limit);
-
     if (!userId) {
       return res.status(401).json({
         success: false,
@@ -673,16 +712,13 @@ router.get('/:id/messages', async (req: AuthRequest, res: Response): Promise<Res
     }
 
     // First, try to find as direct chat
-    const { rows: directChats } = await pool.query(
-      'SELECT * FROM direct_chats WHERE id = $1',
-      [chatId]
-    );
+    const directChat = await prisma.directChat.findUnique({
+      where: { id: chatId }
+    });
 
-    if (directChats.length > 0) {
-      const directChat = directChats[0];
-
+    if (directChat) {
       // Check if user is participant
-      if (directChat.user1_id !== userId && directChat.user2_id !== userId) {
+      if (directChat.sender_id !== userId && directChat.recipient_id !== userId) {
         return res.status(403).json({
           success: false,
           error: 'Access denied'
@@ -691,53 +727,46 @@ router.get('/:id/messages', async (req: AuthRequest, res: Response): Promise<Res
 
       const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
 
-      // Get total count for direct messages
-      const { rows: countResult } = await pool.query(
-        'SELECT COUNT(*) as total FROM direct_messages WHERE direct_chat_id = $1',
-        [chatId]
-      );
-
-      const total = parseInt(countResult[0].total);
-
-      // Get direct messages with sender info
-      const { rows: messages } = await pool.query(`
-        SELECT 
-          dm.id,
-          dm.content,
-          dm.sender_id,
-          dm.direct_chat_id as chat_id,
-          dm.read,
-          dm.delivered,
-          dm.created_at,
-          dm.updated_at,
-          u.id as sender_id,
-          u.name as sender_name,
-          u.email as sender_email,
-          u.avatar as sender_avatar,
-          u.status as sender_status
-        FROM direct_messages dm
-        INNER JOIN users u ON dm.sender_id = u.id
-        WHERE dm.direct_chat_id = $1
-        ORDER BY dm.created_at DESC
-        LIMIT $2 OFFSET $3
-      `, [chatId, parseInt(limit as string), offset]);
+      // Get total count and messages for direct chat
+      const [total, messages] = await Promise.all([
+        prisma.directMessage.count({
+          where: { direct_chat_id: chatId }
+        }),
+        prisma.directMessage.findMany({
+          where: { direct_chat_id: chatId },
+          include: {
+            sender: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+                status: true
+              }
+            }
+          },
+          orderBy: { created_at: 'desc' },
+          skip: offset,
+          take: parseInt(limit as string)
+        })
+      ]);
 
       // Format messages
       const formattedMessages = messages.map(msg => ({
         id: msg.id,
         content: msg.content,
         sender_id: msg.sender_id,
-        chat_id: msg.chat_id,
+        chat_id: msg.direct_chat_id,
         read: Boolean(msg.read),
         delivered: Boolean(msg.delivered),
         created_at: msg.created_at,
         updated_at: msg.updated_at,
         sender: {
-          id: msg.sender_id,
-          name: msg.sender_name,
-          email: msg.sender_email,
-          avatar: msg.sender_avatar,
-          status: msg.sender_status,
+          id: msg.sender.id,
+          name: msg.sender.name,
+          email: msg.sender.email,
+          avatar: msg.sender.avatar,
+          status: msg.sender.status,
           created_at: msg.created_at,
           updated_at: msg.updated_at
         }
@@ -761,19 +790,19 @@ router.get('/:id/messages', async (req: AuthRequest, res: Response): Promise<Res
     }
 
     // If not found as direct chat, try as group chat
-    const { rows: groupChats } = await pool.query(
-      'SELECT * FROM group_chats WHERE id = $1',
-      [chatId]
-    );
+    const groupChat = await prisma.groupChat.findUnique({
+      where: { id: chatId },
+      include: {
+        participants: {
+          where: { user_id: userId },
+          select: { role: true }
+        }
+      }
+    });
 
-    if (groupChats.length > 0) {
+    if (groupChat) {
       // Check if user is participant
-      const { rows: participants } = await pool.query(
-        'SELECT * FROM group_chat_participants WHERE group_chat_id = $1 AND user_id = $2',
-        [chatId, userId]
-      );
-
-      if (participants.length === 0) {
+      if (groupChat.participants.length === 0) {
         return res.status(403).json({
           success: false,
           error: 'Access denied'
@@ -782,54 +811,47 @@ router.get('/:id/messages', async (req: AuthRequest, res: Response): Promise<Res
 
       const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
 
-      // Get total count for group messages
-      const { rows: countResult } = await pool.query(
-        'SELECT COUNT(*) as total FROM group_messages WHERE group_chat_id = $1',
-        [chatId]
-      );
-
-      const total = parseInt(countResult[0].total);
-
-      // Get group messages with sender info
-      const { rows: messages } = await pool.query(`
-        SELECT 
-          gm.id,
-          gm.content,
-          gm.sender_id,
-          gm.group_chat_id as chat_id,
-          gm.read_by,
-          gm.delivered_to,
-          gm.created_at,
-          gm.updated_at,
-          u.id as sender_id,
-          u.name as sender_name,
-          u.email as sender_email,
-          u.avatar as sender_avatar,
-          u.status as sender_status
-        FROM group_messages gm
-        INNER JOIN users u ON gm.sender_id = u.id
-        WHERE gm.group_chat_id = $1
-        ORDER BY gm.created_at DESC
-        LIMIT $2 OFFSET $3
-      `, [chatId, parseInt(limit as string), offset]);
+      // Get total count and messages for group chat
+      const [total, messages] = await Promise.all([
+        prisma.groupMessage.count({
+          where: { group_chat_id: chatId }
+        }),
+        prisma.groupMessage.findMany({
+          where: { group_chat_id: chatId },
+          include: {
+            sender: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+                status: true
+              }
+            }
+          },
+          orderBy: { created_at: 'desc' },
+          skip: offset,
+          take: parseInt(limit as string)
+        })
+      ]);
 
       // Format messages
-      const formattedMessages = messages.map(msg => ({
+      const formattedMessages = messages.map((msg: any) => ({
         id: msg.id,
         content: msg.content,
         sender_id: msg.sender_id,
-        chat_id: msg.chat_id,
-        read: msg.read_by ? msg.read_by.includes(userId) : false,
-        read_by_recipient: msg.delivered_to ? msg.delivered_to.includes(userId) : false,
-        delivered: msg.delivered_to || [],
+        chat_id: msg.group_chat_id,
+        read: false, // Group messages don't have individual read status
+        read_by_recipient: false,
+        delivered: [],
         created_at: msg.created_at,
         updated_at: msg.updated_at,
         sender: {
-          id: msg.sender_id,
-          name: msg.sender_name,
-          email: msg.sender_email,
-          avatar: msg.sender_avatar,
-          status: msg.sender_status,
+          id: msg.sender.id,
+          name: msg.sender.name,
+          email: msg.sender.email,
+          avatar: msg.sender.avatar,
+          status: msg.sender.status,
           created_at: msg.created_at,
           updated_at: msg.updated_at
         }
@@ -873,9 +895,6 @@ router.post('/:id/messages', async (req: AuthRequest, res: Response) => {
   const userId = req.user?.id;
 
   try {
-    console.log('📤 SEND MESSAGE - Chat ID:', chatId);
-    console.log('📤 SEND MESSAGE - Content:', content?.substring(0, 50) + '...');
-
     if (!userId) {
       return res.status(401).json({
         success: false,
@@ -891,16 +910,13 @@ router.post('/:id/messages', async (req: AuthRequest, res: Response) => {
     }
 
     // First, try to find as direct chat
-    const { rows: directChats } = await pool.query(
-      'SELECT * FROM direct_chats WHERE id = $1',
-      [chatId]
-    );
+    const directChat = await prisma.directChat.findUnique({
+      where: { id: chatId }
+    });
 
-    if (directChats.length > 0) {
-      const directChat = directChats[0];
-
+    if (directChat) {
       // Check if user is participant
-      if (directChat.user1_id !== userId && directChat.user2_id !== userId) {
+      if (directChat.sender_id !== userId && directChat.recipient_id !== userId) {
         return res.status(403).json({
           success: false,
           error: 'Access denied'
@@ -909,57 +925,50 @@ router.post('/:id/messages', async (req: AuthRequest, res: Response) => {
 
       // Create direct message
       const messageId = uuidv4();
-      await pool.query(
-        'INSERT INTO direct_messages (id, content, sender_id, direct_chat_id, delivered) VALUES ($1, $2, $3, $4, $5)',
-        [messageId, content.trim(), userId, chatId, false]
-      );
+      const newMessage = await prisma.directMessage.create({
+        data: {
+          id: messageId,
+          content: content.trim(),
+          sender_id: userId,
+          direct_chat_id: chatId,
+          delivered: false
+        },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatar: true,
+              status: true
+            }
+          }
+        }
+      });
 
       // Update direct chat's updated_at timestamp
-      await pool.query(
-        'UPDATE direct_chats SET updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-        [chatId]
-      );
-
-      // Get created message with sender info
-      const { rows: messages } = await pool.query(`
-        SELECT 
-          dm.id,
-          dm.content,
-          dm.sender_id,
-          dm.direct_chat_id as chat_id,
-          dm.read,
-          dm.delivered,
-          dm.created_at,
-          dm.updated_at,
-          u.id as sender_id,
-          u.name as sender_name,
-          u.email as sender_email,
-          u.avatar as sender_avatar,
-          u.status as sender_status
-        FROM direct_messages dm
-        INNER JOIN users u ON dm.sender_id = u.id
-        WHERE dm.id = $1
-      `, [messageId]);
-
-      const message = messages[0];
+      await prisma.directChat.update({
+        where: { id: chatId },
+        data: { updated_at: new Date() }
+      });
 
       const formattedMessage = {
-        id: message.id,
-        content: message.content,
-        sender_id: message.sender_id,
-        chat_id: message.chat_id,
-        read: Boolean(message.read),
-        delivered: message.delivered ?? false,
-        created_at: message.created_at,
-        updated_at: message.updated_at,
+        id: newMessage.id,
+        content: newMessage.content,
+        sender_id: newMessage.sender_id,
+        chat_id: newMessage.direct_chat_id,
+        read: Boolean(newMessage.read),
+        delivered: Boolean(newMessage.delivered),
+        created_at: newMessage.created_at,
+        updated_at: newMessage.updated_at,
         sender: {
-          id: message.sender_id,
-          name: message.sender_name,
-          email: message.sender_email,
-          avatar: message.sender_avatar,
-          status: message.sender_status,
-          created_at: message.created_at,
-          updated_at: message.updated_at
+          id: newMessage.sender.id,
+          name: newMessage.sender.name,
+          email: newMessage.sender.email,
+          avatar: newMessage.sender.avatar,
+          status: newMessage.sender.status,
+          created_at: newMessage.created_at,
+          updated_at: newMessage.updated_at
         }
       };
 
@@ -970,19 +979,19 @@ router.post('/:id/messages', async (req: AuthRequest, res: Response) => {
     }
 
     // If not found as direct chat, try as group chat
-    const { rows: groupChats } = await pool.query(
-      'SELECT * FROM group_chats WHERE id = $1',
-      [chatId]
-    );
+    const groupChat = await prisma.groupChat.findUnique({
+      where: { id: chatId },
+      include: {
+        participants: {
+          where: { user_id: userId },
+          select: { role: true }
+        }
+      }
+    });
 
-    if (groupChats.length > 0) {
+    if (groupChat) {
       // Check if user is participant
-      const { rows: participants } = await pool.query(
-        'SELECT * FROM group_chat_participants WHERE group_chat_id = $1 AND user_id = $2',
-        [chatId, userId]
-      );
-
-      if (participants.length === 0) {
+      if (groupChat.participants.length === 0) {
         return res.status(403).json({
           success: false,
           error: 'Access denied'
@@ -991,58 +1000,50 @@ router.post('/:id/messages', async (req: AuthRequest, res: Response) => {
 
       // Create group message
       const messageId = uuidv4();
-      await pool.query(
-        'INSERT INTO group_messages (id, content, sender_id, group_chat_id) VALUES ($1, $2, $3, $4)',
-        [messageId, content.trim(), userId, chatId]
-      );
+      const newMessage = await prisma.groupMessage.create({
+        data: {
+          id: messageId,
+          content: content.trim(),
+          sender_id: userId,
+          group_chat_id: chatId
+        },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatar: true,
+              status: true
+            }
+          }
+        }
+      });
 
       // Update group chat's updated_at timestamp
-      await pool.query(
-        'UPDATE group_chats SET updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-        [chatId]
-      );
-
-      // Get created message with sender info
-      const { rows: messages } = await pool.query(`
-        SELECT 
-          gm.id,
-          gm.content,
-          gm.sender_id,
-          gm.group_chat_id as chat_id,
-          gm.read_by,
-          gm.delivered_to,
-          gm.created_at,
-          gm.updated_at,
-          u.id as sender_id,
-          u.name as sender_name,
-          u.email as sender_email,
-          u.avatar as sender_avatar,
-          u.status as sender_status
-        FROM group_messages gm
-        INNER JOIN users u ON gm.sender_id = u.id
-        WHERE gm.id = $1
-      `, [messageId]);
-
-      const message = messages[0];
+      await prisma.groupChat.update({
+        where: { id: chatId },
+        data: { updated_at: new Date() }
+      });
 
       const formattedMessage = {
-        id: message.id,
-        content: message.content,
-        sender_id: message.sender_id,
-        chat_id: message.chat_id,
-        read: message.read_by ? message.read_by.includes(userId) : false,
-        read_by_recipient: message.delivered_to ? message.delivered_to.includes(userId) : false,
-        delivered: message.delivered_to || [],
-        created_at: message.created_at,
-        updated_at: message.updated_at,
+        id: newMessage.id,
+        content: newMessage.content,
+        sender_id: newMessage.sender_id,
+        chat_id: newMessage.group_chat_id,
+        read: false, // Group messages don't have individual read status
+        read_by_recipient: false,
+        delivered: [],
+        created_at: newMessage.created_at,
+        updated_at: newMessage.updated_at,
         sender: {
-          id: message.sender_id,
-          name: message.sender_name,
-          email: message.sender_email,
-          avatar: message.sender_avatar,
-          status: message.sender_status,
-          created_at: message.created_at,
-          updated_at: message.updated_at
+          id: newMessage.sender.id,
+          name: newMessage.sender.name,
+          email: newMessage.sender.email,
+          avatar: newMessage.sender.avatar,
+          status: newMessage.sender.status,
+          created_at: newMessage.created_at,
+          updated_at: newMessage.updated_at
         }
       };
 
@@ -1071,9 +1072,6 @@ router.put('/:id/messages/read', async (req: AuthRequest, res: Response) => {
     const { id: chatId } = req.params;
     const userId = req.user?.id;
 
-    console.log('👁️ MARK READ - Chat ID:', chatId);
-    console.log('👁️ MARK READ - User ID:', userId);
-
     if (!userId) {
       return res.status(401).json({
         success: false,
@@ -1082,16 +1080,13 @@ router.put('/:id/messages/read', async (req: AuthRequest, res: Response) => {
     }
 
     // First, try to find as direct chat
-    const { rows: directChats } = await pool.query(
-      'SELECT * FROM direct_chats WHERE id = $1',
-      [chatId]
-    );
+    const directChat = await prisma.directChat.findUnique({
+      where: { id: chatId }
+    });
 
-    if (directChats.length > 0) {
-      const directChat = directChats[0];
-
+    if (directChat) {
       // Check if user is participant
-      if (directChat.user1_id !== userId && directChat.user2_id !== userId) {
+      if (directChat.sender_id !== userId && directChat.recipient_id !== userId) {
         return res.status(403).json({
           success: false,
           error: 'Access denied'
@@ -1099,36 +1094,37 @@ router.put('/:id/messages/read', async (req: AuthRequest, res: Response) => {
       }
 
       // Get all messages that will be marked as read
-      const { rows: messagesToMark } = await pool.query(
-        'SELECT id FROM direct_messages WHERE direct_chat_id = $1 AND sender_id != $2 AND read = false',
-        [chatId, userId]
-      );
+      const messagesToMark = await prisma.directMessage.findMany({
+        where: {
+          direct_chat_id: chatId,
+          sender_id: { not: userId },
+          read: false
+        },
+        select: { id: true }
+      });
 
       // Mark all unread direct messages as read
-      await pool.query(
-        'UPDATE direct_messages SET read = true WHERE direct_chat_id = $1 AND sender_id != $2 AND read = false',
-        [chatId, userId]
-      );
+      await prisma.directMessage.updateMany({
+        where: {
+          direct_chat_id: chatId,
+          sender_id: { not: userId },
+          read: false
+        },
+        data: { read: true }
+      });
 
       // Emit socket events for each message that was marked as read
       try {
         const { safeEmit } = require('../socket/socketManager');
 
         if (messagesToMark.length > 0) {
-          console.log('📖 EMITTING READ EVENTS - Chat ID:', chatId, 'Messages:', messagesToMark.length);
-          console.log('📖 Messages to mark:', messagesToMark.map(msg => msg.id));
-
           for (const message of messagesToMark) {
-            console.log('📖 Emitting read event for message:', message.id);
             safeEmit('message:read', {
               chatId: chatId,
               messageId: message.id,
               userId: userId
             }, chatId);
           }
-          console.log('📖 SUCCESSFULLY EMITTED READ EVENTS - Chat ID:', chatId);
-        } else {
-          console.log('📖 NO MESSAGES TO MARK - Chat ID:', chatId, 'Messages:', messagesToMark.length);
         }
       } catch (socketError) {
         console.error('Error emitting socket events:', socketError);
@@ -1141,19 +1137,19 @@ router.put('/:id/messages/read', async (req: AuthRequest, res: Response) => {
     }
 
     // If not found as direct chat, try as group chat
-    const { rows: groupChats } = await pool.query(
-      'SELECT * FROM group_chats WHERE id = $1',
-      [chatId]
-    );
+    const groupChat = await prisma.groupChat.findUnique({
+      where: { id: chatId },
+      include: {
+        participants: {
+          where: { user_id: userId },
+          select: { role: true }
+        }
+      }
+    });
 
-    if (groupChats.length > 0) {
+    if (groupChat) {
       // Check if user is participant
-      const { rows: participants } = await pool.query(
-        'SELECT * FROM group_chat_participants WHERE group_chat_id = $1 AND user_id = $2',
-        [chatId, userId]
-      );
-
-      if (participants.length === 0) {
+      if (groupChat.participants.length === 0) {
         return res.status(403).json({
           success: false,
           error: 'Access denied'
@@ -1161,42 +1157,51 @@ router.put('/:id/messages/read', async (req: AuthRequest, res: Response) => {
       }
 
       // Get all messages that will be marked as read
-      const { rows: messagesToMark } = await pool.query(
-        'SELECT id FROM group_messages WHERE group_chat_id = $1 AND sender_id != $2 AND (read_by IS NULL OR NOT (read_by ? $3))',
-        [chatId, userId, userId]
-      );
+      const messagesToMark = await prisma.groupMessage.findMany({
+        where: {
+          group_chat_id: chatId,
+          sender_id: { not: userId },
+          readBy: {
+            not: {
+              path: '$',
+              array_contains: userId
+            }
+          }
+        },
+        select: { id: true }
+      });
 
-      // Mark all unread group messages as read by adding user to read_by array
-      await pool.query(`
-        UPDATE group_messages 
-        SET read_by = CASE 
-          WHEN read_by IS NULL THEN ARRAY[$2]
-          ELSE array_append(read_by, $2)
-        END
-        WHERE group_chat_id = $1 
-        AND sender_id != $2 
-        AND (read_by IS NULL OR NOT (read_by ? $2))
-      `, [chatId, userId]);
+      // Mark all unread group messages as read by adding user to readBy array
+      await prisma.groupMessage.updateMany({
+        where: {
+          group_chat_id: chatId,
+          sender_id: { not: userId },
+          readBy: {
+            not: {
+              path: '$',
+              array_contains: userId
+            }
+          }
+        },
+        data: {
+          readBy: {
+            push: userId
+          }
+        }
+      });
 
       // Emit socket events for each message that was marked as read
       try {
         const { safeEmit } = require('../socket/socketManager');
 
         if (messagesToMark.length > 0) {
-          console.log('📖 EMITTING READ EVENTS - Chat ID:', chatId, 'Messages:', messagesToMark.length);
-          console.log('📖 Messages to mark:', messagesToMark.map(msg => msg.id));
-
           for (const message of messagesToMark) {
-            console.log('📖 Emitting read event for message:', message.id);
             safeEmit('message:read', {
               chatId: chatId,
               messageId: message.id,
               userId: userId
             }, chatId);
           }
-          console.log('📖 SUCCESSFULLY EMITTED READ EVENTS - Chat ID:', chatId);
-        } else {
-          console.log('📖 NO MESSAGES TO MARK - Chat ID:', chatId, 'Messages:', messagesToMark.length);
         }
       } catch (socketError) {
         console.error('Error emitting socket events:', socketError);

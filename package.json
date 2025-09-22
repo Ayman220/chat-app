@@ -13,11 +13,9 @@
     "build:server": "tsc",
     "build:watch": "tsc --watch",
     "install-all": "npm install && cd client && npm install",
-    "setup-db": "ts-node server/database/setup.ts",
     "debug:server": "cd server && node --inspect=0.0.0.0:9229 debug.js",
     "debug:client": "cd client && node --inspect=0.0.0.0:9230 debug.js",
-    "debug:both": "concurrently \"npm run debug:server\" \"npm run debug:client\"",
-    "reset-db": "cd server && npx ts-node reset-db.ts"
+    "debug:both": "concurrently \"npm run debug:server\" \"npm run debug:client\""
   },
   "keywords": [
     "chat",
@@ -29,6 +27,7 @@
   "author": "Ayman Audi",
   "license": "MIT",
   "dependencies": {
+    "@prisma/client": "^6.16.2",
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.4",
     "cors": "^2.8.5",
@@ -58,6 +57,7 @@
     "@types/uuid": "^10.0.0",
     "concurrently": "^8.2.0",
     "nodemon": "^3.0.1",
+    "prisma": "^6.16.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3"
   }

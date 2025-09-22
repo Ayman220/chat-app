@@ -1,0 +1,127 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../server/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id         String   @id @default(uuid())
+  name       String
+  email      String   @unique
+  password   String
+  avatar     String?
+  status     String   @default("online")
+  last_seen  DateTime @default(now())
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  // Relations
+  directChatsAsSender    DirectChat[]           @relation("SenderDirectChats")
+  directChatsAsRecipient DirectChat[]           @relation("RecipientDirectChats")
+  createdGroups          GroupChat[]            @relation("GroupCreator")
+  groupChatParticipants  GroupChatParticipant[]
+  directMessages         DirectMessage[]
+  groupMessages          GroupMessage[]
+  passwordResetTokens    PasswordResetToken[]
+}
+
+model DirectChat {
+  id           String   @id @default(uuid())
+  sender_id    String
+  recipient_id String
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  // Foreign key relations
+  sender    User @relation("SenderDirectChats", fields: [sender_id], references: [id], onDelete: Cascade)
+  recipient User @relation("RecipientDirectChats", fields: [recipient_id], references: [id], onDelete: Cascade)
+
+  // Messages in this direct chat
+  messages DirectMessage[]
+
+  // Ensure unique pairs of users
+  @@unique([sender_id, recipient_id])
+}
+
+model GroupChat {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  avatar      String?
+  created_by  String
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  // Foreign key relation
+  creator User @relation("GroupCreator", fields: [created_by], references: [id], onDelete: Cascade)
+
+  // Relations
+  participants GroupChatParticipant[]
+  messages     GroupMessage[]
+}
+
+model GroupChatParticipant {
+  id            String   @id @default(uuid())
+  group_chat_id String
+  user_id       String
+  role          String   @default("member") // 'admin' or 'member'
+  joined_at     DateTime @default(now())
+
+  // Foreign key relations
+  groupChat GroupChat @relation(fields: [group_chat_id], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  // Ensure unique user per group
+  @@unique([group_chat_id, user_id])
+}
+
+model DirectMessage {
+  id             String   @id @default(uuid())
+  content        String
+  sender_id      String
+  direct_chat_id String
+  delivered      Boolean  @default(false)
+  read           Boolean  @default(false)
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  // Foreign key relations
+  sender     User       @relation(fields: [sender_id], references: [id], onDelete: Cascade)
+  directChat DirectChat @relation(fields: [direct_chat_id], references: [id], onDelete: Cascade)
+}
+
+model GroupMessage {
+  id            String   @id @default(uuid())
+  content       String
+  sender_id     String
+  group_chat_id String
+  readBy        Json     @default("[]")
+  deliveredTo   Json     @default("[]")
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  // Foreign key relations
+  sender    User      @relation(fields: [sender_id], references: [id], onDelete: Cascade)
+  groupChat GroupChat @relation(fields: [group_chat_id], references: [id], onDelete: Cascade)
+}
+
+model PasswordResetToken {
+  id         String   @id @default(uuid())
+  user_id    String
+  token      String   @unique
+  expires_at DateTime
+  created_at DateTime @default(now())
+
+  // Foreign key relation
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+}
