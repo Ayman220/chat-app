@@ -9,6 +9,7 @@ import Sidebar from './Sidebar';
 import ChatWindow from './ChatWindow';
 import Header from './Header';
 import LoadingSpinner from '../common/LoadingSpinner';
+import NotificationSetup from '../common/NotificationSetup';
 import { RootState, AppDispatch } from '../../store';
 import { showToast } from '../common/CustomToast';
 
@@ -57,11 +58,6 @@ const ChatApp: React.FC = () => {
           type: 'success'
         });
       });
-    } else {
-      const token = localStorage.getItem('token');
-      if (token) {
-        socketService.connect(token);
-      }
     }
   }, [dispatch, navigate]);
 
@@ -140,6 +136,7 @@ const ChatApp: React.FC = () => {
 
         {/* Main chat area */}
         <div className="flex-1 flex flex-col">
+          <NotificationSetup />
           <ChatWindow />
         </div>
       </div>

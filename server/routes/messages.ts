@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { AuthRequest, Message, MessageWithSender, ApiResponse, PaginatedResponse } from '../types';
 import { PrismaClient } from '../generated/prisma';
+import fcmService from '../services/fcm';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -303,6 +304,33 @@ router.post('/:chatId', async (req: AuthRequest, res: Response) => {
         updated_at: newMessage.sender.updated_at
       }
     };
+
+    // Send FCM notification asynchronously (don't await)
+    if (chatType === 'direct' && directChat) {
+      // For direct messages, send notification to the recipient
+      const recipientId = directChat.sender_id === userId ? directChat.recipient_id : directChat.sender_id;
+
+      // Fire and forget - don't block the response
+      fcmService.sendMessageNotification(recipientId, {
+        chatId,
+        chatType: 'direct',
+        senderName: newMessage.sender.name,
+        messageContent: newMessage.content,
+        senderAvatar: newMessage.sender.avatar
+      }).catch(error => {
+        console.error('FCM notification error (async):', error);
+      });
+    } else if (groupChat) {
+      // For group messages, send notification to all participants except sender
+      // Fire and forget - don't block the response
+      fcmService.sendGroupMessageNotification(groupChat.id, userId, {
+        senderName: newMessage.sender.name,
+        messageContent: newMessage.content,
+        senderAvatar: newMessage.sender.avatar
+      }).catch(error => {
+        console.error('FCM notification error (async):', error);
+      });
+    }
 
     return res.status(201).json({
       success: true,

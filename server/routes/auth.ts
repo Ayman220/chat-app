@@ -2,9 +2,10 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import nodemailer from 'nodemailer';
-import { generateToken } from '../middleware/auth';
-import { UserWithoutPassword, ApiResponse } from '../types';
+import { generateToken, authenticateToken } from '../middleware/auth';
+import { UserWithoutPassword, ApiResponse, AuthRequest } from '../types';
 import { PrismaClient } from '../generated/prisma';
+import fcmService from '../services/fcm';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -334,6 +335,82 @@ router.post('/reset-password', async (req: Request, res: Response): Promise<Resp
     return res.status(500).json({
       success: false,
       error: 'Password reset failed'
+    } as ApiResponse);
+  }
+});
+
+// Register FCM token
+router.post('/fcm-token', authenticateToken, async (req: AuthRequest, res: Response): Promise<Response> => {
+  try {
+    const { token } = req.body;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: 'User not authenticated'
+      } as ApiResponse);
+    }
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        error: 'FCM token is required'
+      } as ApiResponse);
+    }
+
+    const success = await fcmService.updateToken(userId, token);
+
+    if (success) {
+      return res.json({
+        success: true,
+        message: 'FCM token registered successfully'
+      } as ApiResponse);
+    } else {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to register FCM token'
+      } as ApiResponse);
+    }
+  } catch (error) {
+    console.error('FCM token registration error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'FCM token registration failed'
+    } as ApiResponse);
+  }
+});
+
+// Remove FCM token
+router.delete('/fcm-token', authenticateToken, async (req: AuthRequest, res: Response): Promise<Response> => {
+  try {
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: 'User not authenticated'
+      } as ApiResponse);
+    }
+
+    const success = await fcmService.removeToken(userId);
+
+    if (success) {
+      return res.json({
+        success: true,
+        message: 'FCM token removed successfully'
+      } as ApiResponse);
+    } else {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to remove FCM token'
+      } as ApiResponse);
+    }
+  } catch (error) {
+    console.error('FCM token removal error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'FCM token removal failed'
     } as ApiResponse);
   }
 });

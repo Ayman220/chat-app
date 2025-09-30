@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { AuthRequest, UserWithoutPassword, ApiResponse } from '../types';
 import { PrismaClient } from '../generated/prisma';
 import { emitNewChatCreated } from '../socket/socketManager';
+import fcmService from '../services/fcm';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -981,6 +982,20 @@ router.post('/:id/messages', async (req: AuthRequest, res: Response) => {
         }
       };
 
+      // Send FCM notification asynchronously (don't await)
+      const recipientId = directChat.sender_id === userId ? directChat.recipient_id : directChat.sender_id;
+
+      // Fire and forget - don't block the response
+      fcmService.sendMessageNotification(recipientId, {
+        chatId,
+        chatType: 'direct',
+        senderName: newMessage.sender.name,
+        messageContent: newMessage.content,
+        senderAvatar: newMessage.sender.avatar || undefined
+      }).catch(error => {
+        console.error('FCM notification error (async):', error);
+      });
+
       return res.status(201).json({
         success: true,
         data: formattedMessage
@@ -1055,6 +1070,16 @@ router.post('/:id/messages', async (req: AuthRequest, res: Response) => {
           updated_at: newMessage.updated_at
         }
       };
+
+      // Send FCM notification asynchronously (don't await)
+      // Fire and forget - don't block the response
+      fcmService.sendGroupMessageNotification(groupChat.id, userId, {
+        senderName: newMessage.sender.name,
+        messageContent: newMessage.content,
+        senderAvatar: newMessage.sender.avatar || undefined
+      }).catch(error => {
+        console.error('FCM notification error (async):', error);
+      });
 
       return res.status(201).json({
         success: true,

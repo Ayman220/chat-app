@@ -42,6 +42,8 @@ export const sendMessage = createAsyncThunk(
           chatId,
           message
         });
+      } else {
+        console.warn('sendMessage: No socket available');
       }
 
       return {

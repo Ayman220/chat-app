@@ -2,6 +2,7 @@ import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
 import { AuthState, User, LoginFormData, RegisterFormData, ApiResponse } from '../../types';
 import api from '../../services/api';
 import socketService from '../../services/socket';
+import fcmService from '../../services/fcm';
 
 const initialState: AuthState = {
   user: null,
@@ -59,7 +60,16 @@ export const verifyToken = createAsyncThunk(
         throw new Error('No token found');
       }
       const response = await api.get<ApiResponse<User>>('/auth/me');
-      return response.data.data!;
+      const user = response.data.data!;
+
+      // Connect to socket after successful token verification
+      try {
+        const socket = socketService.connect(token);
+      } catch (error) {
+        console.error('Auth: Socket connection failed on token verification:', error);
+      }
+
+      return user;
     } catch (error: any) {
       localStorage.removeItem('token');
       return rejectWithValue('Token verification failed');
@@ -87,6 +97,22 @@ export const resetPassword = createAsyncThunk(
       return 'Password reset successful';
     } catch (error: any) {
       return rejectWithValue(error.response?.data?.message || 'Password reset failed');
+    }
+  }
+);
+
+export const initializeFCM = createAsyncThunk(
+  'auth/initializeFCM',
+  async (_, { rejectWithValue }) => {
+    try {
+      const success = await fcmService.initialize();
+      if (success) {
+        return 'FCM initialized successfully';
+      } else {
+        return rejectWithValue('Failed to initialize FCM');
+      }
+    } catch (error: any) {
+      return rejectWithValue(error.message || 'FCM initialization failed');
     }
   }
 );
@@ -196,6 +222,18 @@ const authSlice = createSlice({
         state.loading = false;
       })
       .addCase(resetPassword.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload as string;
+      })
+      // Initialize FCM
+      .addCase(initializeFCM.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(initializeFCM.fulfilled, (state) => {
+        state.loading = false;
+      })
+      .addCase(initializeFCM.rejected, (state, action) => {
         state.loading = false;
         state.error = action.payload as string;
       });

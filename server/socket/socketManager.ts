@@ -59,6 +59,7 @@ export const initializeSocket = (io: Server): void => {
   });
 
   io.on('connection', (socket: AuthenticatedSocket) => {
+
     // Add user to connected users
     if (socket.user) {
       connectedUsers.set(socket.user.id, {
@@ -114,8 +115,8 @@ export const initializeSocket = (io: Server): void => {
     // Handle new message
     socket.on('new_message', async (data: { chatId: string; message: MessageWithSender }) => {
       try {
-        // Broadcast message to all users in the chat
-        socket.to(data.chatId).emit('new_message', data);
+        // Broadcast message to all users in the chat (including sender)
+        globalIo.to(data.chatId).emit('new_message', data);
 
         // Update delivery status for online users who are not actively viewing the chat
         await updateMessageDeliveryStatus(data.chatId, data.message.id, data.message.sender_id);
@@ -490,6 +491,10 @@ export const getUserSocket = (userId: string, io: Server): Socket | null => {
 // Helper function to get global Io instance
 export const getGlobalIo = (): Server | undefined => {
   return globalIo;
+};
+
+export const getConnectedUsers = (): Map<string, ConnectedUser> => {
+  return connectedUsers;
 };
 
 // Helper function to emit new chat creation event
